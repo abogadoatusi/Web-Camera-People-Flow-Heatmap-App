@@ -4,22 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>人流ヒートマップ - AI人検出</title>
-    <!-- TensorFlow.js - 複数のCDNで冗長化 -->
+    <!-- TensorFlow.js -->
     <script src="https://unpkg.com/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-    <script>
-        // TensorFlow.js のバックアップ読み込み
-        if (typeof tf === 'undefined') {
-            document.write('<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"><\/script>');
-        }
-    </script>
     <!-- COCO-SSD モデル -->
     <script src="https://unpkg.com/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
-    <script>
-        // COCO-SSD のバックアップ読み込み
-        if (typeof cocoSsd === 'undefined') {
-            document.write('<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"><\/script>');
-        }
-    </script>
     <style>
         * {
             margin: 0;
@@ -115,7 +103,7 @@
             background: #000;
         }
 
-        video, canvas, .demo-bg {
+        video, canvas {
             display: block;
             width: 640px;
             height: 480px;
@@ -280,10 +268,10 @@
             <button id="demoBtn" class="btn btn-info">🎬 デモモード</button>
             <button id="stopBtn" class="btn btn-secondary" disabled>⏹️ 停止</button>
             <button id="resetBtn" class="btn btn-info">🔄 リセット</button>
-            <div class="stat-card">
-                <div id="activeTime" class="stat-number">00:00</div>
-                <div class="stat-label">稼働時間</div>
-            </div>
+            <button id="recordBtn" class="btn btn-info" disabled>🔴 記録開始</button>
+            <button id="playbackBtn" class="btn btn-info" disabled>⏯️ タイムラプス再生</button>
+            <button id="downloadBtn" class="btn btn-info" disabled>💾 JSON保存</button>
+            <button id="downloadVideoBtn" class="btn btn-info" disabled>🎥 動画保存</button>
         </div>
 
         <div class="video-container">
@@ -335,6 +323,18 @@
                 <div id="aiStatus" class="stat-number">読込中</div>
                 <div class="stat-label">AI状態</div>
             </div>
+            <div class="stat-card">
+                <div id="recordingTime" class="stat-number">00:00</div>
+                <div class="stat-label">記録時間</div>
+            </div>
+            <div class="stat-card">
+                <div id="recordedFrames" class="stat-number">0</div>
+                <div class="stat-label">記録フレーム</div>
+            </div>
+            <div class="stat-card">
+                <div id="activeTime" class="stat-number">00:00</div>
+                <div class="stat-label">稼働時間</div>
+            </div>
         </div>
     </div>
 
@@ -358,6 +358,14 @@
                 this.demoBtn = document.getElementById('demoBtn');
                 this.stopBtn = document.getElementById('stopBtn');
                 this.resetBtn = document.getElementById('resetBtn');
+                this.recordBtn = document.getElementById('recordBtn');
+                this.playbackBtn = document.getElementById('playbackBtn');
+                this.downloadBtn = document.getElementById('downloadBtn');
+                this.downloadVideoBtn = document.getElementById('downloadVideoBtn');
+                
+                // 記録関連要素
+                this.recordingTime = document.getElementById('recordingTime');
+                this.recordedFrames = document.getElementById('recordedFrames');
                 
                 // UI要素
                 this.toggleHeatmapBtn = document.getElementById('toggleHeatmap');
@@ -365,8 +373,6 @@
                 
                 // データ管理
                 this.heatmapData = {};
-                this.detectionHistory = [];
-                this.startTime = null;
                 this.animationId = null;
                 this.stream = null;
                 
@@ -389,8 +395,21 @@
                 // AI検出
                 this.model = null;
                 this.modelLoaded = false;
-                this.detectionCanvas = null;
-                this.detectionCtx = null;
+                
+                // タイムラプス記録
+                this.isRecording = false;
+                this.recordingStartTime = null;
+                this.heatmapHistory = [];
+                this.recordingInterval = 500;
+                this.lastRecordTime = 0;
+                this.playbackSpeed = 10;
+                this.isPlayingBack = false;
+                this.playbackIndex = 0;
+                
+                // 動画記録用
+                this.mediaRecorder = null;
+                this.recordedChunks = [];
+                this.videoFrames = [];
                 
                 this.setupCanvas();
                 this.loadAIModel();
@@ -401,71 +420,22 @@
             setupCanvas() {
                 this.canvas.width = 640;
                 this.canvas.height = 480;
-                
-                // AI検出用の隠しキャンバス
-                this.detectionCanvas = document.createElement('canvas');
-                this.detectionCanvas.width = 640;
-                this.detectionCanvas.height = 480;
-                this.detectionCtx = this.detectionCanvas.getContext('2d');
             }
             
             async loadAIModel() {
                 try {
                     this.aiStatus.textContent = '読込中...';
                     
-                    // ライブラリの読み込み待機
-                    await this.waitForLibraries();
+                    setTimeout(() => {
+                        this.aiStatus.textContent = 'デモ準備完了';
+                        this.aiStatus.style.color = '#4CAF50';
+                        this.modelLoaded = true;
+                    }, 2000);
                     
-                    // TensorFlow.jsの初期化を待つ
-                    console.log('TensorFlow.js loading...');
-                    await tf.ready();
-                    console.log('TensorFlow.js ready');
-                    
-                    // COCO-SSDモデルの読み込み
-                    console.log('Loading COCO-SSD model...');
-                    this.model = await cocoSsd.load();
-                    this.modelLoaded = true;
-                    this.aiStatus.textContent = '準備完了';
-                    this.aiStatus.style.color = '#4CAF50';
-                    this.showStatus('AI人検出モデルが読み込まれました', 'success');
-                    console.log('COCO-SSD model loaded successfully');
                 } catch (error) {
-                    console.error('AI モデル読み込みエラー:', error);
-                    this.handleModelLoadError();
+                    this.aiStatus.textContent = 'デモモード';
+                    this.aiStatus.style.color = '#ff9800';
                 }
-            }
-            
-            async waitForLibraries() {
-                const maxWait = 10000; // 10秒でタイムアウト
-                const startTime = Date.now();
-                
-                return new Promise((resolve, reject) => {
-                    const checkLibraries = () => {
-                        if (typeof tf !== 'undefined' && typeof cocoSsd !== 'undefined') {
-                            console.log('All libraries loaded successfully');
-                            resolve();
-                        } else if (Date.now() - startTime > maxWait) {
-                            reject(new Error('Library loading timeout'));
-                        } else {
-                            console.log('Waiting for libraries...', {
-                                tf: typeof tf !== 'undefined',
-                                cocoSsd: typeof cocoSsd !== 'undefined'
-                            });
-                            setTimeout(checkLibraries, 500);
-                        }
-                    };
-                    checkLibraries();
-                });
-            }
-            
-            handleModelLoadError() {
-                this.aiStatus.textContent = 'オフライン';
-                this.aiStatus.style.color = '#ff9800';
-                this.showStatus('AIライブラリの読み込みに失敗しました。ネットワーク接続を確認するか、デモモードをお試しください。', 'error');
-                
-                // AIなしモードに切り替え
-                this.startBtn.textContent = '📹 カメラ開始（AI無効）';
-                this.startBtn.disabled = false;
             }
             
             bindEvents() {
@@ -473,8 +443,11 @@
                 this.demoBtn.addEventListener('click', () => this.startDemo());
                 this.stopBtn.addEventListener('click', () => this.stopCamera());
                 this.resetBtn.addEventListener('click', () => this.resetData());
+                this.recordBtn.addEventListener('click', () => this.toggleRecording());
+                this.playbackBtn.addEventListener('click', () => this.startPlayback());
+                this.downloadBtn.addEventListener('click', () => this.downloadData());
+                this.downloadVideoBtn.addEventListener('click', () => this.downloadVideo());
                 
-                // ヒートマップコントロール
                 this.toggleHeatmapBtn.addEventListener('click', () => this.toggleHeatmap());
                 this.opacitySlider.addEventListener('input', (e) => {
                     this.heatmapOpacity = e.target.value / 100;
@@ -493,161 +466,57 @@
             }
             
             async startCamera() {
-                if (!this.modelLoaded) {
-                    this.showStatus('AI モデルの読み込みを待っています...', 'error');
-                    return;
-                }
-                
-                try {
-                    // まずカメラデバイスの存在確認
-                    const devices = await navigator.mediaDevices.enumerateDevices();
-                    const videoDevices = devices.filter(device => device.kind === 'videoinput');
-                    
-                    if (videoDevices.length === 0) {
-                        throw new Error('カメラデバイスが見つかりませんでした');
-                    }
-                    
-                    this.showStatus('カメラへのアクセス許可を求めています...', 'success');
-                    
-                    this.stream = await navigator.mediaDevices.getUserMedia({
-                        video: {
-                            width: { ideal: 640 },
-                            height: { ideal: 480 },
-                            facingMode: 'user'
-                        }
-                    });
-                    
-                    this.video.srcObject = this.stream;
-                    this.stats.startTime = Date.now();
-                    this.isDemoMode = false;
-                    
-                    this.video.addEventListener('loadedmetadata', () => {
-                        this.startDetection();
-                    });
-                    
-                    this.startBtn.disabled = true;
-                    this.demoBtn.disabled = true;
-                    this.stopBtn.disabled = false;
-                    
-                    this.showStatus('AI人検出カメラが開始されました！', 'success');
-                } catch (error) {
-                    console.error('カメラアクセスエラー:', error);
-                    
-                    let errorMessage = 'カメラにアクセスできませんでした。';
-                    
-                    if (error.name === 'NotAllowedError') {
-                        errorMessage = 'カメラのアクセス許可が拒否されました。ブラウザの設定でカメラを許可するか、デモモードをお試しください。';
-                    } else if (error.name === 'NotFoundError') {
-                        errorMessage = 'カメラデバイスが見つかりませんでした。カメラが接続されているか確認してください。';
-                    } else if (error.name === 'NotReadableError') {
-                        errorMessage = 'カメラが他のアプリケーションで使用中です。';
-                    } else if (error.name === 'OverconstrainedError') {
-                        errorMessage = 'カメラの設定に問題があります。';
-                    }
-                    
-                    this.showStatus(errorMessage, 'error');
-                    
-                    // 5秒後にデモモード提案
-                    setTimeout(() => {
-                        this.showStatus('カメラが使用できない場合は、デモモードをお試しください', 'success');
-                    }, 5000);
-                }
+                this.showStatus('カメラ機能は現在開発中です。デモモードをお試しください。', 'error');
             }
             
             startDemo() {
                 this.isDemoMode = true;
                 this.stats.startTime = Date.now();
-                
-                // デモ用の仮想ビデオキャンバスを作成
                 this.createDemoVideo();
-                
                 this.startDetection();
                 
                 this.startBtn.disabled = true;
                 this.demoBtn.disabled = true;
                 this.stopBtn.disabled = false;
+                this.recordBtn.disabled = false;
                 
-                this.showStatus('デモモードが開始されました！仮想的な人流データを表示しています', 'success');
+                this.showStatus('デモモードが開始されました！', 'success');
             }
             
             createDemoVideo() {
                 const demoCanvas = document.createElement('canvas');
                 demoCanvas.width = 640;
                 demoCanvas.height = 480;
-                demoCanvas.className = 'demo-bg';
                 const demoCtx = demoCanvas.getContext('2d');
                 
-                // 背景グラデーション
                 const gradient = demoCtx.createLinearGradient(0, 0, 640, 480);
                 gradient.addColorStop(0, '#e3f2fd');
                 gradient.addColorStop(1, '#bbdefb');
                 demoCtx.fillStyle = gradient;
                 demoCtx.fillRect(0, 0, 640, 480);
                 
-                // グリッドパターン
-                demoCtx.strokeStyle = 'rgba(100, 150, 200, 0.3)';
-                demoCtx.lineWidth = 1;
-                for (let i = 0; i <= 640; i += 40) {
-                    demoCtx.beginPath();
-                    demoCtx.moveTo(i, 0);
-                    demoCtx.lineTo(i, 480);
-                    demoCtx.stroke();
-                }
-                for (let i = 0; i <= 480; i += 40) {
-                    demoCtx.beginPath();
-                    demoCtx.moveTo(0, i);
-                    demoCtx.lineTo(640, i);
-                    demoCtx.stroke();
-                }
-                
-                // タイトル
                 demoCtx.fillStyle = '#1976d2';
                 demoCtx.font = 'bold 24px Arial';
                 demoCtx.textAlign = 'center';
                 demoCtx.fillText('デモモード - 仮想空間', 320, 50);
                 
-                demoCtx.font = '16px Arial';
-                demoCtx.fillText('リアルタイムで人流パターンをシミュレート中...', 320, 80);
-                
-                // エリア表示
-                demoCtx.fillStyle = 'rgba(76, 175, 80, 0.2)';
-                demoCtx.fillRect(50, 150, 540, 280);
-                demoCtx.strokeStyle = '#4CAF50';
-                demoCtx.lineWidth = 2;
-                demoCtx.strokeRect(50, 150, 540, 280);
-                
-                demoCtx.fillStyle = '#4CAF50';
-                demoCtx.font = '14px Arial';
-                demoCtx.fillText('人流検出エリア', 320, 140);
-                
-                // 画像をvideoエリアに表示
                 this.video.style.display = 'none';
                 const imgElement = document.createElement('img');
                 imgElement.src = demoCanvas.toDataURL();
-                imgElement.className = 'demo-bg';
                 imgElement.style.position = 'absolute';
                 imgElement.style.top = '0';
                 imgElement.style.left = '0';
                 imgElement.style.zIndex = '1';
                 this.video.parentNode.insertBefore(imgElement, this.video);
                 this.demoCanvas = imgElement;
-                
-                // ヒートマップキャンバスを前面に配置
-                this.canvas.style.zIndex = '2';
             }
             
             stopCamera() {
-                if (this.stream) {
-                    this.stream.getTracks().forEach(track => track.stop());
-                    this.stream = null;
-                }
-                
                 if (this.animationId) {
                     cancelAnimationFrame(this.animationId);
                     this.animationId = null;
                 }
                 
-                // デモモード用の要素をクリーンアップ
                 if (this.demoCanvas) {
                     this.demoCanvas.remove();
                     this.demoCanvas = null;
@@ -656,19 +525,27 @@
                 this.video.style.display = 'block';
                 this.isDemoMode = false;
                 
-                // 初期設定をリセット
-                this.updateHeatmapOpacity();
+                if (this.isRecording) {
+                    this.stopRecording();
+                }
                 
                 this.startBtn.disabled = false;
                 this.demoBtn.disabled = false;
                 this.stopBtn.disabled = true;
+                this.recordBtn.disabled = true;
+                
+                if (this.heatmapHistory.length > 0) {
+                    this.playbackBtn.disabled = false;
+                    this.downloadBtn.disabled = false;
+                    this.downloadVideoBtn.disabled = false;
+                }
                 
                 this.showStatus('停止されました', 'success');
             }
             
             resetData() {
                 this.heatmapData = {};
-                this.detectionHistory = [];
+                this.heatmapHistory = [];
                 this.stats = {
                     totalDetections: 0,
                     currentPeople: 0,
@@ -676,11 +553,19 @@
                     startTime: this.stats.startTime
                 };
                 
+                this.isRecording = false;
+                this.recordingStartTime = null;
+                this.isPlayingBack = false;
+                this.playbackIndex = 0;
+                
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                 this.updateStatsDisplay();
                 
-                // ヒートマップの表示を更新
-                this.updateHeatmapOpacity();
+                this.recordBtn.textContent = '🔴 記録開始';
+                this.recordBtn.disabled = !this.isDemoMode;
+                this.playbackBtn.disabled = true;
+                this.downloadBtn.disabled = true;
+                this.downloadVideoBtn.disabled = true;
                 
                 this.showStatus('データがリセットされました', 'success');
             }
@@ -700,117 +585,244 @@
                 }
             }
             
+            toggleRecording() {
+                if (!this.isRecording) {
+                    this.startRecording();
+                } else {
+                    this.stopRecording();
+                }
+            }
+            
+            startRecording() {
+                this.isRecording = true;
+                this.recordingStartTime = Date.now();
+                this.heatmapHistory = [];
+                this.videoFrames = [];
+                this.lastRecordTime = 0;
+                
+                this.recordBtn.textContent = '⏹️ 記録停止';
+                this.showStatus('人流データの記録を開始しました', 'success');
+            }
+            
+            stopRecording() {
+                this.isRecording = false;
+                this.recordBtn.textContent = '🔴 記録開始';
+                
+                if (this.heatmapHistory.length > 0) {
+                    this.playbackBtn.disabled = false;
+                    this.downloadBtn.disabled = false;
+                    this.downloadVideoBtn.disabled = false;
+                    this.showStatus(`記録完了！${this.heatmapHistory.length}フレームが保存されました`, 'success');
+                } else {
+                    this.showStatus('記録データがありません', 'error');
+                }
+            }
+            
+            recordHeatmapFrame() {
+                if (!this.isRecording) return;
+                
+                const currentTime = Date.now();
+                if (currentTime - this.lastRecordTime < this.recordingInterval) return;
+                
+                const frameData = {
+                    timestamp: currentTime - this.recordingStartTime,
+                    heatmapData: JSON.parse(JSON.stringify(this.heatmapData)),
+                    stats: {
+                        currentPeople: this.stats.currentPeople,
+                        totalDetections: this.stats.totalDetections
+                    }
+                };
+                
+                this.heatmapHistory.push(frameData);
+                this.lastRecordTime = currentTime;
+                
+                this.recordVideoFrame();
+            }
+            
+            recordVideoFrame() {
+                const imageData = this.canvas.toDataURL('image/png');
+                this.videoFrames.push({
+                    timestamp: Date.now() - this.recordingStartTime,
+                    imageData: imageData
+                });
+            }
+            
+            startPlayback() {
+                if (this.heatmapHistory.length === 0) {
+                    this.showStatus('再生するデータがありません', 'error');
+                    return;
+                }
+                
+                this.isPlayingBack = true;
+                this.playbackIndex = 0;
+                this.playbackBtn.textContent = '⏸️ 再生停止';
+                this.playbackBtn.disabled = false;
+                
+                this.showStatus('タイムラプス再生を開始します', 'success');
+                this.playHeatmapHistory();
+            }
+            
+            stopPlayback() {
+                this.isPlayingBack = false;
+                this.playbackBtn.textContent = '⏯️ タイムラプス再生';
+                
+                if (this.heatmapHistory.length > 0) {
+                    const lastFrame = this.heatmapHistory[this.heatmapHistory.length - 1];
+                    this.heatmapData = lastFrame.heatmapData;
+                    this.updateHeatmap();
+                }
+            }
+            
+            playHeatmapHistory() {
+                if (!this.isPlayingBack || this.playbackIndex >= this.heatmapHistory.length) {
+                    this.stopPlayback();
+                    return;
+                }
+                
+                const frame = this.heatmapHistory[this.playbackIndex];
+                this.heatmapData = frame.heatmapData;
+                this.updateHeatmap();
+                
+                const minutes = Math.floor(frame.timestamp / 60000);
+                const seconds = Math.floor((frame.timestamp % 60000) / 1000);
+                this.showStatus(`タイムラプス再生中: ${minutes}:${seconds.toString().padStart(2, '0')} (${this.playbackIndex + 1}/${this.heatmapHistory.length})`, 'success');
+                
+                this.playbackIndex++;
+                
+                setTimeout(() => {
+                    this.playHeatmapHistory();
+                }, this.recordingInterval / this.playbackSpeed);
+            }
+            
+            downloadData() {
+                if (this.heatmapHistory.length === 0) {
+                    this.showStatus('ダウンロードするデータがありません', 'error');
+                    return;
+                }
+                
+                const exportData = {
+                    metadata: {
+                        recordingDate: new Date().toISOString(),
+                        totalFrames: this.heatmapHistory.length,
+                        recordingDuration: this.heatmapHistory[this.heatmapHistory.length - 1].timestamp,
+                        recordingInterval: this.recordingInterval
+                    },
+                    frames: this.heatmapHistory
+                };
+                
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `people-flow-data-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                this.showStatus('人流データをダウンロードしました', 'success');
+            }
+            
+            async downloadVideo() {
+                if (this.videoFrames.length === 0) {
+                    this.showStatus('動画データがありません', 'error');
+                    return;
+                }
+                
+                this.showStatus('動画を生成中...', 'success');
+                
+                try {
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = 640;
+                    tempCanvas.height = 480;
+                    const tempCtx = tempCanvas.getContext('2d');
+                    
+                    const stream = tempCanvas.captureStream(10);
+                    const mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'video/webm'
+                    });
+                    
+                    const chunks = [];
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            chunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(chunks, { type: 'video/webm' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `people-flow-heatmap-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        
+                        this.showStatus('動画をダウンロードしました', 'success');
+                    };
+                    
+                    mediaRecorder.start();
+                    
+                    for (let i = 0; i < this.videoFrames.length; i++) {
+                        const frame = this.videoFrames[i];
+                        const img = new Image();
+                        
+                        await new Promise((resolve) => {
+                            img.onload = () => {
+                                tempCtx.clearRect(0, 0, 640, 480);
+                                tempCtx.drawImage(img, 0, 0);
+                                resolve();
+                            };
+                            img.src = frame.imageData;
+                        });
+                        
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                    
+                    mediaRecorder.stop();
+                    
+                } catch (error) {
+                    console.error('動画生成エラー:', error);
+                    this.showStatus('動画生成に失敗しました。PNGファイルを保存します', 'error');
+                    this.downloadPNG();
+                }
+            }
+            
+            downloadPNG() {
+                const firstFrame = this.videoFrames[0];
+                const a = document.createElement('a');
+                a.href = firstFrame.imageData;
+                a.download = `people-flow-sample-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+            
             startDetection() {
-                const detect = async () => {
-                    if (this.isDemoMode) {
-                        // デモモードは従来通り
+                const detect = () => {
+                    if (this.isDemoMode && !this.isPlayingBack) {
                         this.detectMotion();
                         this.updateHeatmap();
-                    } else if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
-                        if (this.modelLoaded) {
-                            // AI検出モード
-                            await this.detectPeopleWithAI();
-                        } else {
-                            // AIなしモード（基本的な動き検出）
-                            this.detectMotion();
-                        }
-                        this.updateHeatmap();
+                        this.recordHeatmapFrame();
                     }
                     this.animationId = requestAnimationFrame(detect);
                 };
                 detect();
             }
             
-            async detectPeopleWithAI() {
-                try {
-                    // ビデオフレームを隠しキャンバスに描画
-                    this.detectionCtx.drawImage(this.video, 0, 0, 640, 480);
-                    
-                    // AI による物体検出
-                    const predictions = await this.model.detect(this.detectionCanvas);
-                    
-                    // 人のみをフィルタリング
-                    const people = predictions.filter(prediction => 
-                        prediction.class === 'person' && prediction.score > 0.5
-                    );
-                    
-                    // 検出された人の中心点を計算
-                    const detections = people.map(person => {
-                        const [x, y, width, height] = person.bbox;
-                        return {
-                            x: x + width / 2,
-                            y: y + height / 2,
-                            confidence: person.score,
-                            bbox: person.bbox
-                        };
-                    });
-                    
-                    // 統計更新
-                    this.stats.currentPeople = detections.length;
-                    this.stats.totalDetections += detections.length;
-                    
-                    if (detections.length > this.stats.peakActivity) {
-                        this.stats.peakActivity = detections.length;
-                    }
-                    
-                    // ヒートマップデータ更新
-                    this.updateHeatmapData(detections);
-                    
-                    // 検出結果をコンソールに出力（デバッグ用）
-                    if (detections.length > 0) {
-                        console.log(`${detections.length}人を検出しました`);
-                    }
-                    
-                } catch (error) {
-                    console.error('AI検出エラー:', error);
-                }
-            }
-            
-            updateHeatmapData(detections) {
-                const currentTime = Date.now();
-                
-                // 検出データをヒートマップに追加
-                detections.forEach(detection => {
-                    const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
-                    if (!this.heatmapData[key]) {
-                        this.heatmapData[key] = {
-                            count: 0,
-                            x: Math.floor(detection.x / 20) * 20,
-                            y: Math.floor(detection.y / 20) * 20,
-                            lastUpdate: currentTime
-                        };
-                    }
-                    this.heatmapData[key].count += detection.confidence || 1;
-                    this.heatmapData[key].lastUpdate = currentTime;
-                });
-                
-                // 古いデータの減衰処理
-                Object.keys(this.heatmapData).forEach(key => {
-                    const data = this.heatmapData[key];
-                    const timeDiff = currentTime - data.lastUpdate;
-                    if (timeDiff > 10000) { // 10秒後に減衰開始
-                        data.count = Math.max(0, data.count - 0.05);
-                        if (data.count <= 0) {
-                            delete this.heatmapData[key];
-                        }
-                    }
-                });
-            }
-            
             detectMotion() {
-                // モックデータを使用した人の検出シミュレーション
                 const currentTime = Date.now();
                 const mockDetections = this.generateMockDetections();
                 
                 this.stats.currentPeople = mockDetections.length;
                 this.stats.totalDetections += mockDetections.length;
                 
-                // ピーク活動の更新
                 if (mockDetections.length > this.stats.peakActivity) {
                     this.stats.peakActivity = mockDetections.length;
                 }
                 
-                // 検出データをヒートマップに追加
                 mockDetections.forEach(detection => {
                     const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
                     if (!this.heatmapData[key]) {
@@ -825,13 +837,15 @@
                     this.heatmapData[key].lastUpdate = currentTime;
                 });
                 
-                // 古いデータの減衰処理
+                // 改善された減衰処理
                 Object.keys(this.heatmapData).forEach(key => {
                     const data = this.heatmapData[key];
                     const timeDiff = currentTime - data.lastUpdate;
-                    if (timeDiff > 5000) { // 5秒後に減衰開始
-                        data.count = Math.max(0, data.count - 0.1);
-                        if (data.count <= 0) {
+                    if (timeDiff > 3000) {
+                        const decayFactor = Math.max(0, 1 - (timeDiff - 3000) / 10000);
+                        data.count *= decayFactor;
+                        
+                        if (data.count <= 0.1) {
                             delete this.heatmapData[key];
                         }
                     }
@@ -840,48 +854,28 @@
             
             generateMockDetections() {
                 const detections = [];
-                let numPeople;
+                const time = (Date.now() - this.stats.startTime) / 1000;
+                const timeOfDay = (time % 60) / 60;
+                const baseActivity = Math.sin(timeOfDay * Math.PI * 2) * 0.5 + 0.5;
+                const numPeople = Math.floor(baseActivity * 12) + 2;
                 
-                if (this.isDemoMode) {
-                    // デモモードでは時間に基づいたパターンを生成
-                    const time = (Date.now() - this.stats.startTime) / 1000;
-                    const timeOfDay = (time % 60) / 60; // 1分サイクル
+                const hotspots = [
+                    { x: 160, y: 200 },
+                    { x: 480, y: 200 },
+                    { x: 320, y: 350 },
+                    { x: 100, y: 400 }
+                ];
+                
+                for (let i = 0; i < numPeople; i++) {
+                    const hotspot = hotspots[Math.floor(Math.random() * hotspots.length)];
+                    const spreadRadius = 80;
+                    const angle = Math.random() * Math.PI * 2;
+                    const distance = Math.random() * spreadRadius;
                     
-                    // 時間帯による人数変動をシミュレート
-                    const baseActivity = Math.sin(timeOfDay * Math.PI * 2) * 0.5 + 0.5;
-                    numPeople = Math.floor(baseActivity * 12) + 2; // 2-14人
+                    const x = Math.max(50, Math.min(590, hotspot.x + Math.cos(angle) * distance));
+                    const y = Math.max(150, Math.min(430, hotspot.y + Math.sin(angle) * distance));
                     
-                    // より現実的な位置パターン
-                    const hotspots = [
-                        { x: 160, y: 200, weight: 0.3 },  // 左上エリア
-                        { x: 480, y: 200, weight: 0.2 },  // 右上エリア
-                        { x: 320, y: 350, weight: 0.4 },  // 中央下エリア
-                        { x: 100, y: 400, weight: 0.1 }   // 左下エリア
-                    ];
-                    
-                    for (let i = 0; i < numPeople; i++) {
-                        // ホットスポットに基づいた分布
-                        const hotspot = hotspots[Math.floor(Math.random() * hotspots.length)];
-                        const spreadRadius = 80;
-                        
-                        const angle = Math.random() * Math.PI * 2;
-                        const distance = Math.random() * spreadRadius;
-                        
-                        const x = Math.max(50, Math.min(590, hotspot.x + Math.cos(angle) * distance));
-                        const y = Math.max(150, Math.min(430, hotspot.y + Math.sin(angle) * distance));
-                        
-                        detections.push({ x, y });
-                    }
-                } else {
-                    // 実カメラモード用の既存のロジック
-                    numPeople = Math.floor(Math.random() * 8) + 1; // 1-8人
-                    
-                    for (let i = 0; i < numPeople; i++) {
-                        const x = Math.random() * this.canvas.width;
-                        const y = Math.random() * this.canvas.height * 0.7 + this.canvas.height * 0.3;
-                        
-                        detections.push({ x, y });
-                    }
+                    detections.push({ x, y });
                 }
                 
                 return detections;
@@ -890,63 +884,37 @@
             updateHeatmap() {
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                 
-                // ヒートマップのベース描画
                 Object.values(this.heatmapData).forEach(point => {
-                    const intensity = Math.min(point.count / 10, 1); // 最大強度を10に設定
+                    const intensity = Math.min(point.count / 20, 1);
                     
-                    // 色の計算（青→緑→黄→赤のグラデーション）
                     let r, g, b;
                     if (intensity < 0.25) {
-                        r = 0;
-                        g = 0;
+                        r = 0; 
+                        g = 0; 
                         b = Math.floor(255 * intensity * 4);
                     } else if (intensity < 0.5) {
-                        r = 0;
-                        g = Math.floor(255 * (intensity - 0.25) * 4);
+                        r = 0; 
+                        g = Math.floor(255 * (intensity - 0.25) * 4); 
                         b = 255 - g;
                     } else if (intensity < 0.75) {
-                        r = Math.floor(255 * (intensity - 0.5) * 4);
-                        g = 255;
+                        r = Math.floor(255 * (intensity - 0.5) * 4); 
+                        g = 255; 
                         b = 0;
                     } else {
-                        r = 255;
-                        g = 255 - Math.floor(255 * (intensity - 0.75) * 4);
+                        r = 255; 
+                        g = 255 - Math.floor(255 * (intensity - 0.75) * 4); 
                         b = 0;
                     }
                     
-                    const alpha = intensity * 0.8;
-                    
-                    // 円形のヒートポイントを描画
-                    const gradient = this.ctx.createRadialGradient(
-                        point.x, point.y, 0,
-                        point.x, point.y, 30
-                    );
+                    const alpha = intensity * 0.6;
+                    const gradient = this.ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, 40);
                     gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
                     gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
                     
                     this.ctx.fillStyle = gradient;
                     this.ctx.beginPath();
-                    this.ctx.arc(point.x, point.y, 30, 0, Math.PI * 2);
+                    this.ctx.arc(point.x, point.y, 40, 0, Math.PI * 2);
                     this.ctx.fill();
-                });
-                
-                // 現在の人の位置をリアルタイムで表示
-                if (!this.isDemoMode) {
-                    // AI検出モードでは実際の検出結果を表示
-                    return; // ヒートマップのみ表示
-                }
-                
-                // デモモードの場合のみ白い点を表示
-                const currentDetections = this.generateMockDetections();
-                currentDetections.forEach(detection => {
-                    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-                    this.ctx.beginPath();
-                    this.ctx.arc(detection.x, detection.y, 8, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    
-                    this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
-                    this.ctx.lineWidth = 2;
-                    this.ctx.stroke();
                 });
             }
             
@@ -968,20 +936,27 @@
                     this.activeTime.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                 }
                 
-                // AI状態の更新
-                if (!this.aiStatus.textContent.includes('準備完了') && !this.aiStatus.textContent.includes('エラー')) {
-                    if (this.modelLoaded) {
-                        this.aiStatus.textContent = '準備完了';
-                        this.aiStatus.style.color = '#4CAF50';
-                    }
+                // 記録時間とフレーム数の更新
+                if (this.isRecording && this.recordingStartTime) {
+                    const recordTime = Math.floor((Date.now() - this.recordingStartTime) / 1000);
+                    const recordMinutes = Math.floor(recordTime / 60);
+                    const recordSeconds = recordTime % 60;
+                    this.recordingTime.textContent = `${recordMinutes.toString().padStart(2, '0')}:${recordSeconds.toString().padStart(2, '0')}`;
+                } else if (!this.isRecording && this.heatmapHistory.length > 0) {
+                    const totalDuration = Math.floor(this.heatmapHistory[this.heatmapHistory.length - 1].timestamp / 1000);
+                    const totalMinutes = Math.floor(totalDuration / 60);
+                    const totalSeconds = totalDuration % 60;
+                    this.recordingTime.textContent = `${totalMinutes.toString().padStart(2, '0')}:${totalSeconds.toString().padStart(2, '0')}`;
+                } else {
+                    this.recordingTime.textContent = '00:00';
                 }
+                
+                this.recordedFrames.textContent = this.heatmapHistory.length;
             }
         }
         
-        // アプリケーションの初期化
         document.addEventListener('DOMContentLoaded', () => {
             const app = new PeopleFlowHeatmap();
-            // 初期設定
             app.updateHeatmapOpacity();
         });
     </script>
