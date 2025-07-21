@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>人流ヒートマップ - AI人検出</title>
+    <!-- TensorFlow.js - 複数のCDNで冗長化 -->
+    <script src="https://unpkg.com/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script>
+        // TensorFlow.js のバックアップ読み込み
+        if (typeof tf === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"><\/script>');
+        }
+    </script>
+    <!-- COCO-SSD モデル -->
+    <script src="https://unpkg.com/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+    <script>
+        // COCO-SSD のバックアップ読み込み
+        if (typeof cocoSsd === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"><\/script>');
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+        }
+
+        .btn-info {
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .video-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+
+        .video-wrapper {
+            position: relative;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            background: #000;
+        }
+
+        video, canvas, .demo-bg {
+            display: block;
+            width: 640px;
+            height: 480px;
+            max-width: 100%;
+            border-radius: 15px;
+        }
+
+        #heatmapCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 2;
+            opacity: 0.7;
+        }
+
+        .overlay-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .overlay-btn {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: all 0.3s ease;
+        }
+
+        .overlay-btn:hover {
+            background: rgba(0, 0, 0, 0.9);
+            transform: scale(1.05);
+        }
+
+        .opacity-slider {
+            width: 100px;
+            margin: 5px 0;
+        }
+
+        .label {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+            backdrop-filter: blur(5px);
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #ffffff, #f8f9fa);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 15px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid white;
+        }
+
+        .status {
+            text-align: center;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+
+        .status.success {
+            background: linear-gradient(135deg, #d4edda, #c3e6cb);
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+            
+            video, canvas {
+                width: 100%;
+                height: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 人流ヒートマップ分析システム</h1>
+        
+        <div id="status" class="status" style="display: none;"></div>
+        
+        <div class="controls">
+            <button id="startBtn" class="btn btn-primary">📹 AI人検出開始</button>
+            <button id="demoBtn" class="btn btn-info">🎬 デモモード</button>
+            <button id="stopBtn" class="btn btn-secondary" disabled>⏹️ 停止</button>
+            <button id="resetBtn" class="btn btn-info">🔄 リセット</button>
+            <div class="stat-card">
+                <div id="activeTime" class="stat-number">00:00</div>
+                <div class="stat-label">稼働時間</div>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <div class="video-wrapper">
+                <video id="video" autoplay muted playsinline></video>
+                <canvas id="heatmapCanvas"></canvas>
+                <div class="label">ライブ映像 + AI人検出ヒートマップ</div>
+                <div class="overlay-controls">
+                    <button id="toggleHeatmap" class="overlay-btn">🔥 ON</button>
+                    <input type="range" id="opacitySlider" class="opacity-slider" min="0" max="100" value="70">
+                    <span style="color: white; font-size: 10px; text-align: center;">透明度</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(0, 0, 255, 0.3);"></div>
+                <span>低密度</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(0, 255, 0, 0.5);"></div>
+                <span>中密度</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(255, 255, 0, 0.7);"></div>
+                <span>高密度</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(255, 0, 0, 0.8);"></div>
+                <span>最高密度</span>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div id="totalDetections" class="stat-number">0</div>
+                <div class="stat-label">総検出数</div>
+            </div>
+            <div class="stat-card">
+                <div id="currentPeople" class="stat-number">0</div>
+                <div class="stat-label">現在の人数</div>
+            </div>
+            <div class="stat-card">
+                <div id="peakActivity" class="stat-number">0</div>
+                <div class="stat-label">ピーク活動</div>
+            </div>
+            <div class="stat-card">
+                <div id="aiStatus" class="stat-number">読込中</div>
+                <div class="stat-label">AI状態</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class PeopleFlowHeatmap {
+            constructor() {
+                this.video = document.getElementById('video');
+                this.canvas = document.getElementById('heatmapCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                
+                // 統計要素
+                this.totalDetections = document.getElementById('totalDetections');
+                this.currentPeople = document.getElementById('currentPeople');
+                this.peakActivity = document.getElementById('peakActivity');
+                this.activeTime = document.getElementById('activeTime');
+                this.aiStatus = document.getElementById('aiStatus');
+                this.status = document.getElementById('status');
+                
+                // ボタン
+                this.startBtn = document.getElementById('startBtn');
+                this.demoBtn = document.getElementById('demoBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.resetBtn = document.getElementById('resetBtn');
+                
+                // UI要素
+                this.toggleHeatmapBtn = document.getElementById('toggleHeatmap');
+                this.opacitySlider = document.getElementById('opacitySlider');
+                
+                // データ管理
+                this.heatmapData = {};
+                this.detectionHistory = [];
+                this.startTime = null;
+                this.animationId = null;
+                this.stream = null;
+                
+                // モード管理
+                this.isDemoMode = false;
+                this.demoCanvas = null;
+                
+                // ヒートマップ設定
+                this.heatmapEnabled = true;
+                this.heatmapOpacity = 0.7;
+                
+                // 統計
+                this.stats = {
+                    totalDetections: 0,
+                    currentPeople: 0,
+                    peakActivity: 0,
+                    startTime: null
+                };
+                
+                // AI検出
+                this.model = null;
+                this.modelLoaded = false;
+                this.detectionCanvas = null;
+                this.detectionCtx = null;
+                
+                this.setupCanvas();
+                this.loadAIModel();
+                this.bindEvents();
+                this.startStatsUpdater();
+            }
+            
+            setupCanvas() {
+                this.canvas.width = 640;
+                this.canvas.height = 480;
+                
+                // AI検出用の隠しキャンバス
+                this.detectionCanvas = document.createElement('canvas');
+                this.detectionCanvas.width = 640;
+                this.detectionCanvas.height = 480;
+                this.detectionCtx = this.detectionCanvas.getContext('2d');
+            }
+            
+            async loadAIModel() {
+                try {
+                    this.aiStatus.textContent = '読込中...';
+                    
+                    // ライブラリの読み込み待機
+                    await this.waitForLibraries();
+                    
+                    // TensorFlow.jsの初期化を待つ
+                    console.log('TensorFlow.js loading...');
+                    await tf.ready();
+                    console.log('TensorFlow.js ready');
+                    
+                    // COCO-SSDモデルの読み込み
+                    console.log('Loading COCO-SSD model...');
+                    this.model = await cocoSsd.load();
+                    this.modelLoaded = true;
+                    this.aiStatus.textContent = '準備完了';
+                    this.aiStatus.style.color = '#4CAF50';
+                    this.showStatus('AI人検出モデルが読み込まれました', 'success');
+                    console.log('COCO-SSD model loaded successfully');
+                } catch (error) {
+                    console.error('AI モデル読み込みエラー:', error);
+                    this.handleModelLoadError();
+                }
+            }
+            
+            async waitForLibraries() {
+                const maxWait = 10000; // 10秒でタイムアウト
+                const startTime = Date.now();
+                
+                return new Promise((resolve, reject) => {
+                    const checkLibraries = () => {
+                        if (typeof tf !== 'undefined' && typeof cocoSsd !== 'undefined') {
+                            console.log('All libraries loaded successfully');
+                            resolve();
+                        } else if (Date.now() - startTime > maxWait) {
+                            reject(new Error('Library loading timeout'));
+                        } else {
+                            console.log('Waiting for libraries...', {
+                                tf: typeof tf !== 'undefined',
+                                cocoSsd: typeof cocoSsd !== 'undefined'
+                            });
+                            setTimeout(checkLibraries, 500);
+                        }
+                    };
+                    checkLibraries();
+                });
+            }
+            
+            handleModelLoadError() {
+                this.aiStatus.textContent = 'オフライン';
+                this.aiStatus.style.color = '#ff9800';
+                this.showStatus('AIライブラリの読み込みに失敗しました。ネットワーク接続を確認するか、デモモードをお試しください。', 'error');
+                
+                // AIなしモードに切り替え
+                this.startBtn.textContent = '📹 カメラ開始（AI無効）';
+                this.startBtn.disabled = false;
+            }
+            
+            bindEvents() {
+                this.startBtn.addEventListener('click', () => this.startCamera());
+                this.demoBtn.addEventListener('click', () => this.startDemo());
+                this.stopBtn.addEventListener('click', () => this.stopCamera());
+                this.resetBtn.addEventListener('click', () => this.resetData());
+                
+                // ヒートマップコントロール
+                this.toggleHeatmapBtn.addEventListener('click', () => this.toggleHeatmap());
+                this.opacitySlider.addEventListener('input', (e) => {
+                    this.heatmapOpacity = e.target.value / 100;
+                    this.updateHeatmapOpacity();
+                });
+            }
+            
+            showStatus(message, type = 'success') {
+                this.status.textContent = message;
+                this.status.className = `status ${type}`;
+                this.status.style.display = 'block';
+                
+                setTimeout(() => {
+                    this.status.style.display = 'none';
+                }, 3000);
+            }
+            
+            async startCamera() {
+                if (!this.modelLoaded) {
+                    this.showStatus('AI モデルの読み込みを待っています...', 'error');
+                    return;
+                }
+                
+                try {
+                    // まずカメラデバイスの存在確認
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                    
+                    if (videoDevices.length === 0) {
+                        throw new Error('カメラデバイスが見つかりませんでした');
+                    }
+                    
+                    this.showStatus('カメラへのアクセス許可を求めています...', 'success');
+                    
+                    this.stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        }
+                    });
+                    
+                    this.video.srcObject = this.stream;
+                    this.stats.startTime = Date.now();
+                    this.isDemoMode = false;
+                    
+                    this.video.addEventListener('loadedmetadata', () => {
+                        this.startDetection();
+                    });
+                    
+                    this.startBtn.disabled = true;
+                    this.demoBtn.disabled = true;
+                    this.stopBtn.disabled = false;
+                    
+                    this.showStatus('AI人検出カメラが開始されました！', 'success');
+                } catch (error) {
+                    console.error('カメラアクセスエラー:', error);
+                    
+                    let errorMessage = 'カメラにアクセスできませんでした。';
+                    
+                    if (error.name === 'NotAllowedError') {
+                        errorMessage = 'カメラのアクセス許可が拒否されました。ブラウザの設定でカメラを許可するか、デモモードをお試しください。';
+                    } else if (error.name === 'NotFoundError') {
+                        errorMessage = 'カメラデバイスが見つかりませんでした。カメラが接続されているか確認してください。';
+                    } else if (error.name === 'NotReadableError') {
+                        errorMessage = 'カメラが他のアプリケーションで使用中です。';
+                    } else if (error.name === 'OverconstrainedError') {
+                        errorMessage = 'カメラの設定に問題があります。';
+                    }
+                    
+                    this.showStatus(errorMessage, 'error');
+                    
+                    // 5秒後にデモモード提案
+                    setTimeout(() => {
+                        this.showStatus('カメラが使用できない場合は、デモモードをお試しください', 'success');
+                    }, 5000);
+                }
+            }
+            
+            startDemo() {
+                this.isDemoMode = true;
+                this.stats.startTime = Date.now();
+                
+                // デモ用の仮想ビデオキャンバスを作成
+                this.createDemoVideo();
+                
+                this.startDetection();
+                
+                this.startBtn.disabled = true;
+                this.demoBtn.disabled = true;
+                this.stopBtn.disabled = false;
+                
+                this.showStatus('デモモードが開始されました！仮想的な人流データを表示しています', 'success');
+            }
+            
+            createDemoVideo() {
+                const demoCanvas = document.createElement('canvas');
+                demoCanvas.width = 640;
+                demoCanvas.height = 480;
+                demoCanvas.className = 'demo-bg';
+                const demoCtx = demoCanvas.getContext('2d');
+                
+                // 背景グラデーション
+                const gradient = demoCtx.createLinearGradient(0, 0, 640, 480);
+                gradient.addColorStop(0, '#e3f2fd');
+                gradient.addColorStop(1, '#bbdefb');
+                demoCtx.fillStyle = gradient;
+                demoCtx.fillRect(0, 0, 640, 480);
+                
+                // グリッドパターン
+                demoCtx.strokeStyle = 'rgba(100, 150, 200, 0.3)';
+                demoCtx.lineWidth = 1;
+                for (let i = 0; i <= 640; i += 40) {
+                    demoCtx.beginPath();
+                    demoCtx.moveTo(i, 0);
+                    demoCtx.lineTo(i, 480);
+                    demoCtx.stroke();
+                }
+                for (let i = 0; i <= 480; i += 40) {
+                    demoCtx.beginPath();
+                    demoCtx.moveTo(0, i);
+                    demoCtx.lineTo(640, i);
+                    demoCtx.stroke();
+                }
+                
+                // タイトル
+                demoCtx.fillStyle = '#1976d2';
+                demoCtx.font = 'bold 24px Arial';
+                demoCtx.textAlign = 'center';
+                demoCtx.fillText('デモモード - 仮想空間', 320, 50);
+                
+                demoCtx.font = '16px Arial';
+                demoCtx.fillText('リアルタイムで人流パターンをシミュレート中...', 320, 80);
+                
+                // エリア表示
+                demoCtx.fillStyle = 'rgba(76, 175, 80, 0.2)';
+                demoCtx.fillRect(50, 150, 540, 280);
+                demoCtx.strokeStyle = '#4CAF50';
+                demoCtx.lineWidth = 2;
+                demoCtx.strokeRect(50, 150, 540, 280);
+                
+                demoCtx.fillStyle = '#4CAF50';
+                demoCtx.font = '14px Arial';
+                demoCtx.fillText('人流検出エリア', 320, 140);
+                
+                // 画像をvideoエリアに表示
+                this.video.style.display = 'none';
+                const imgElement = document.createElement('img');
+                imgElement.src = demoCanvas.toDataURL();
+                imgElement.className = 'demo-bg';
+                imgElement.style.position = 'absolute';
+                imgElement.style.top = '0';
+                imgElement.style.left = '0';
+                imgElement.style.zIndex = '1';
+                this.video.parentNode.insertBefore(imgElement, this.video);
+                this.demoCanvas = imgElement;
+                
+                // ヒートマップキャンバスを前面に配置
+                this.canvas.style.zIndex = '2';
+            }
+            
+            stopCamera() {
+                if (this.stream) {
+                    this.stream.getTracks().forEach(track => track.stop());
+                    this.stream = null;
+                }
+                
+                if (this.animationId) {
+                    cancelAnimationFrame(this.animationId);
+                    this.animationId = null;
+                }
+                
+                // デモモード用の要素をクリーンアップ
+                if (this.demoCanvas) {
+                    this.demoCanvas.remove();
+                    this.demoCanvas = null;
+                }
+                
+                this.video.style.display = 'block';
+                this.isDemoMode = false;
+                
+                // 初期設定をリセット
+                this.updateHeatmapOpacity();
+                
+                this.startBtn.disabled = false;
+                this.demoBtn.disabled = false;
+                this.stopBtn.disabled = true;
+                
+                this.showStatus('停止されました', 'success');
+            }
+            
+            resetData() {
+                this.heatmapData = {};
+                this.detectionHistory = [];
+                this.stats = {
+                    totalDetections: 0,
+                    currentPeople: 0,
+                    peakActivity: 0,
+                    startTime: this.stats.startTime
+                };
+                
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.updateStatsDisplay();
+                
+                // ヒートマップの表示を更新
+                this.updateHeatmapOpacity();
+                
+                this.showStatus('データがリセットされました', 'success');
+            }
+            
+            toggleHeatmap() {
+                this.heatmapEnabled = !this.heatmapEnabled;
+                this.toggleHeatmapBtn.textContent = this.heatmapEnabled ? '🔥 ON' : '🔥 OFF';
+                this.updateHeatmapOpacity();
+            }
+            
+            updateHeatmapOpacity() {
+                if (this.heatmapEnabled) {
+                    this.canvas.style.opacity = this.heatmapOpacity;
+                    this.canvas.style.display = 'block';
+                } else {
+                    this.canvas.style.display = 'none';
+                }
+            }
+            
+            startDetection() {
+                const detect = async () => {
+                    if (this.isDemoMode) {
+                        // デモモードは従来通り
+                        this.detectMotion();
+                        this.updateHeatmap();
+                    } else if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
+                        if (this.modelLoaded) {
+                            // AI検出モード
+                            await this.detectPeopleWithAI();
+                        } else {
+                            // AIなしモード（基本的な動き検出）
+                            this.detectMotion();
+                        }
+                        this.updateHeatmap();
+                    }
+                    this.animationId = requestAnimationFrame(detect);
+                };
+                detect();
+            }
+            
+            async detectPeopleWithAI() {
+                try {
+                    // ビデオフレームを隠しキャンバスに描画
+                    this.detectionCtx.drawImage(this.video, 0, 0, 640, 480);
+                    
+                    // AI による物体検出
+                    const predictions = await this.model.detect(this.detectionCanvas);
+                    
+                    // 人のみをフィルタリング
+                    const people = predictions.filter(prediction => 
+                        prediction.class === 'person' && prediction.score > 0.5
+                    );
+                    
+                    // 検出された人の中心点を計算
+                    const detections = people.map(person => {
+                        const [x, y, width, height] = person.bbox;
+                        return {
+                            x: x + width / 2,
+                            y: y + height / 2,
+                            confidence: person.score,
+                            bbox: person.bbox
+                        };
+                    });
+                    
+                    // 統計更新
+                    this.stats.currentPeople = detections.length;
+                    this.stats.totalDetections += detections.length;
+                    
+                    if (detections.length > this.stats.peakActivity) {
+                        this.stats.peakActivity = detections.length;
+                    }
+                    
+                    // ヒートマップデータ更新
+                    this.updateHeatmapData(detections);
+                    
+                    // 検出結果をコンソールに出力（デバッグ用）
+                    if (detections.length > 0) {
+                        console.log(`${detections.length}人を検出しました`);
+                    }
+                    
+                } catch (error) {
+                    console.error('AI検出エラー:', error);
+                }
+            }
+            
+            updateHeatmapData(detections) {
+                const currentTime = Date.now();
+                
+                // 検出データをヒートマップに追加
+                detections.forEach(detection => {
+                    const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
+                    if (!this.heatmapData[key]) {
+                        this.heatmapData[key] = {
+                            count: 0,
+                            x: Math.floor(detection.x / 20) * 20,
+                            y: Math.floor(detection.y / 20) * 20,
+                            lastUpdate: currentTime
+                        };
+                    }
+                    this.heatmapData[key].count += detection.confidence || 1;
+                    this.heatmapData[key].lastUpdate = currentTime;
+                });
+                
+                // 古いデータの減衰処理
+                Object.keys(this.heatmapData).forEach(key => {
+                    const data = this.heatmapData[key];
+                    const timeDiff = currentTime - data.lastUpdate;
+                    if (timeDiff > 10000) { // 10秒後に減衰開始
+                        data.count = Math.max(0, data.count - 0.05);
+                        if (data.count <= 0) {
+                            delete this.heatmapData[key];
+                        }
+                    }
+                });
+            }
+            
+            detectMotion() {
+                // モックデータを使用した人の検出シミュレーション
+                const currentTime = Date.now();
+                const mockDetections = this.generateMockDetections();
+                
+                this.stats.currentPeople = mockDetections.length;
+                this.stats.totalDetections += mockDetections.length;
+                
+                // ピーク活動の更新
+                if (mockDetections.length > this.stats.peakActivity) {
+                    this.stats.peakActivity = mockDetections.length;
+                }
+                
+                // 検出データをヒートマップに追加
+                mockDetections.forEach(detection => {
+                    const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
+                    if (!this.heatmapData[key]) {
+                        this.heatmapData[key] = {
+                            count: 0,
+                            x: Math.floor(detection.x / 20) * 20,
+                            y: Math.floor(detection.y / 20) * 20,
+                            lastUpdate: currentTime
+                        };
+                    }
+                    this.heatmapData[key].count++;
+                    this.heatmapData[key].lastUpdate = currentTime;
+                });
+                
+                // 古いデータの減衰処理
+                Object.keys(this.heatmapData).forEach(key => {
+                    const data = this.heatmapData[key];
+                    const timeDiff = currentTime - data.lastUpdate;
+                    if (timeDiff > 5000) { // 5秒後に減衰開始
+                        data.count = Math.max(0, data.count - 0.1);
+                        if (data.count <= 0) {
+                            delete this.heatmapData[key];
+                        }
+                    }
+                });
+            }
+            
+            generateMockDetections() {
+                const detections = [];
+                let numPeople;
+                
+                if (this.isDemoMode) {
+                    // デモモードでは時間に基づいたパターンを生成
+                    const time = (Date.now() - this.stats.startTime) / 1000;
+                    const timeOfDay = (time % 60) / 60; // 1分サイクル
+                    
+                    // 時間帯による人数変動をシミュレート
+                    const baseActivity = Math.sin(timeOfDay * Math.PI * 2) * 0.5 + 0.5;
+                    numPeople = Math.floor(baseActivity * 12) + 2; // 2-14人
+                    
+                    // より現実的な位置パターン
+                    const hotspots = [
+                        { x: 160, y: 200, weight: 0.3 },  // 左上エリア
+                        { x: 480, y: 200, weight: 0.2 },  // 右上エリア
+                        { x: 320, y: 350, weight: 0.4 },  // 中央下エリア
+                        { x: 100, y: 400, weight: 0.1 }   // 左下エリア
+                    ];
+                    
+                    for (let i = 0; i < numPeople; i++) {
+                        // ホットスポットに基づいた分布
+                        const hotspot = hotspots[Math.floor(Math.random() * hotspots.length)];
+                        const spreadRadius = 80;
+                        
+                        const angle = Math.random() * Math.PI * 2;
+                        const distance = Math.random() * spreadRadius;
+                        
+                        const x = Math.max(50, Math.min(590, hotspot.x + Math.cos(angle) * distance));
+                        const y = Math.max(150, Math.min(430, hotspot.y + Math.sin(angle) * distance));
+                        
+                        detections.push({ x, y });
+                    }
+                } else {
+                    // 実カメラモード用の既存のロジック
+                    numPeople = Math.floor(Math.random() * 8) + 1; // 1-8人
+                    
+                    for (let i = 0; i < numPeople; i++) {
+                        const x = Math.random() * this.canvas.width;
+                        const y = Math.random() * this.canvas.height * 0.7 + this.canvas.height * 0.3;
+                        
+                        detections.push({ x, y });
+                    }
+                }
+                
+                return detections;
+            }
+            
+            updateHeatmap() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // ヒートマップのベース描画
+                Object.values(this.heatmapData).forEach(point => {
+                    const intensity = Math.min(point.count / 10, 1); // 最大強度を10に設定
+                    
+                    // 色の計算（青→緑→黄→赤のグラデーション）
+                    let r, g, b;
+                    if (intensity < 0.25) {
+                        r = 0;
+                        g = 0;
+                        b = Math.floor(255 * intensity * 4);
+                    } else if (intensity < 0.5) {
+                        r = 0;
+                        g = Math.floor(255 * (intensity - 0.25) * 4);
+                        b = 255 - g;
+                    } else if (intensity < 0.75) {
+                        r = Math.floor(255 * (intensity - 0.5) * 4);
+                        g = 255;
+                        b = 0;
+                    } else {
+                        r = 255;
+                        g = 255 - Math.floor(255 * (intensity - 0.75) * 4);
+                        b = 0;
+                    }
+                    
+                    const alpha = intensity * 0.8;
+                    
+                    // 円形のヒートポイントを描画
+                    const gradient = this.ctx.createRadialGradient(
+                        point.x, point.y, 0,
+                        point.x, point.y, 30
+                    );
+                    gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
+                    gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+                    
+                    this.ctx.fillStyle = gradient;
+                    this.ctx.beginPath();
+                    this.ctx.arc(point.x, point.y, 30, 0, Math.PI * 2);
+                    this.ctx.fill();
+                });
+                
+                // 現在の人の位置をリアルタイムで表示
+                if (!this.isDemoMode) {
+                    // AI検出モードでは実際の検出結果を表示
+                    return; // ヒートマップのみ表示
+                }
+                
+                // デモモードの場合のみ白い点を表示
+                const currentDetections = this.generateMockDetections();
+                currentDetections.forEach(detection => {
+                    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    this.ctx.beginPath();
+                    this.ctx.arc(detection.x, detection.y, 8, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.stroke();
+                });
+            }
+            
+            startStatsUpdater() {
+                setInterval(() => {
+                    this.updateStatsDisplay();
+                }, 1000);
+            }
+            
+            updateStatsDisplay() {
+                this.totalDetections.textContent = this.stats.totalDetections.toLocaleString();
+                this.currentPeople.textContent = this.stats.currentPeople;
+                this.peakActivity.textContent = this.stats.peakActivity;
+                
+                if (this.stats.startTime) {
+                    const elapsedTime = Math.floor((Date.now() - this.stats.startTime) / 1000);
+                    const minutes = Math.floor(elapsedTime / 60);
+                    const seconds = elapsedTime % 60;
+                    this.activeTime.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+                
+                // AI状態の更新
+                if (!this.aiStatus.textContent.includes('準備完了') && !this.aiStatus.textContent.includes('エラー')) {
+                    if (this.modelLoaded) {
+                        this.aiStatus.textContent = '準備完了';
+                        this.aiStatus.style.color = '#4CAF50';
+                    }
+                }
+            }
+        }
+        
+        // アプリケーションの初期化
+        document.addEventListener('DOMContentLoaded', () => {
+            const app = new PeopleFlowHeatmap();
+            // 初期設定
+            app.updateHeatmapOpacity();
+        });
+    </script>
+</body>
+</html>
