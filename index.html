@@ -395,6 +395,8 @@
                 // AI検出
                 this.model = null;
                 this.modelLoaded = false;
+                this.detectionCanvas = null;
+                this.detectionCtx = null;
                 
                 // タイムラプス記録
                 this.isRecording = false;
@@ -420,22 +422,71 @@
             setupCanvas() {
                 this.canvas.width = 640;
                 this.canvas.height = 480;
+                
+                // AI検出用の隠しキャンバス
+                this.detectionCanvas = document.createElement('canvas');
+                this.detectionCanvas.width = 640;
+                this.detectionCanvas.height = 480;
+                this.detectionCtx = this.detectionCanvas.getContext('2d');
             }
             
             async loadAIModel() {
                 try {
                     this.aiStatus.textContent = '読込中...';
                     
-                    setTimeout(() => {
-                        this.aiStatus.textContent = 'デモ準備完了';
-                        this.aiStatus.style.color = '#4CAF50';
-                        this.modelLoaded = true;
-                    }, 2000);
+                    // ライブラリの読み込み待機
+                    await this.waitForLibraries();
                     
+                    // TensorFlow.jsの初期化を待つ
+                    console.log('TensorFlow.js loading...');
+                    await tf.ready();
+                    console.log('TensorFlow.js ready');
+                    
+                    // COCO-SSDモデルの読み込み
+                    console.log('Loading COCO-SSD model...');
+                    this.model = await cocoSsd.load();
+                    this.modelLoaded = true;
+                    this.aiStatus.textContent = '準備完了';
+                    this.aiStatus.style.color = '#4CAF50';
+                    this.showStatus('AI人検出モデルが読み込まれました', 'success');
+                    console.log('COCO-SSD model loaded successfully');
                 } catch (error) {
-                    this.aiStatus.textContent = 'デモモード';
-                    this.aiStatus.style.color = '#ff9800';
+                    console.error('AI モデル読み込みエラー:', error);
+                    this.handleModelLoadError();
                 }
+            }
+            
+            async waitForLibraries() {
+                const maxWait = 10000; // 10秒でタイムアウト
+                const startTime = Date.now();
+                
+                return new Promise((resolve, reject) => {
+                    const checkLibraries = () => {
+                        if (typeof tf !== 'undefined' && typeof cocoSsd !== 'undefined') {
+                            console.log('All libraries loaded successfully');
+                            resolve();
+                        } else if (Date.now() - startTime > maxWait) {
+                            reject(new Error('Library loading timeout'));
+                        } else {
+                            console.log('Waiting for libraries...', {
+                                tf: typeof tf !== 'undefined',
+                                cocoSsd: typeof cocoSsd !== 'undefined'
+                            });
+                            setTimeout(checkLibraries, 500);
+                        }
+                    };
+                    checkLibraries();
+                });
+            }
+            
+            handleModelLoadError() {
+                this.aiStatus.textContent = 'オフライン';
+                this.aiStatus.style.color = '#ff9800';
+                this.showStatus('AIライブラリの読み込みに失敗しました。ネットワーク接続を確認するか、デモモードをお試しください。', 'error');
+                
+                // AIなしモードに切り替え
+                this.startBtn.textContent = '📹 カメラ開始（AI無効）';
+                this.startBtn.disabled = false;
             }
             
             bindEvents() {
@@ -466,7 +517,65 @@
             }
             
             async startCamera() {
-                this.showStatus('カメラ機能は現在開発中です。デモモードをお試しください。', 'error');
+                try {
+                    // まずカメラデバイスの存在確認
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                    
+                    if (videoDevices.length === 0) {
+                        throw new Error('カメラデバイスが見つかりませんでした');
+                    }
+                    
+                    this.showStatus('カメラへのアクセス許可を求めています...', 'success');
+                    
+                    this.stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        }
+                    });
+                    
+                    this.video.srcObject = this.stream;
+                    this.stats.startTime = Date.now();
+                    this.isDemoMode = false;
+                    
+                    this.video.addEventListener('loadedmetadata', () => {
+                        this.startDetection();
+                    });
+                    
+                    this.startBtn.disabled = true;
+                    this.demoBtn.disabled = true;
+                    this.stopBtn.disabled = false;
+                    this.recordBtn.disabled = false;
+                    
+                    if (this.modelLoaded) {
+                        this.showStatus('AI人検出カメラが開始されました！', 'success');
+                    } else {
+                        this.showStatus('カメラが開始されました（AI機能は無効）', 'success');
+                    }
+                } catch (error) {
+                    console.error('カメラアクセスエラー:', error);
+                    
+                    let errorMessage = 'カメラにアクセスできませんでした。';
+                    
+                    if (error.name === 'NotAllowedError') {
+                        errorMessage = 'カメラのアクセス許可が拒否されました。ブラウザの設定でカメラを許可するか、デモモードをお試しください。';
+                    } else if (error.name === 'NotFoundError') {
+                        errorMessage = 'カメラデバイスが見つかりませんでした。カメラが接続されているか確認してください。';
+                    } else if (error.name === 'NotReadableError') {
+                        errorMessage = 'カメラが他のアプリケーションで使用中です。';
+                    } else if (error.name === 'OverconstrainedError') {
+                        errorMessage = 'カメラの設定に問題があります。';
+                    }
+                    
+                    this.showStatus(errorMessage, 'error');
+                    
+                    // 5秒後にデモモード提案
+                    setTimeout(() => {
+                        this.showStatus('カメラが使用できない場合は、デモモードをお試しください', 'success');
+                    }, 5000);
+                }
             }
             
             startDemo() {
@@ -801,9 +910,20 @@
             }
             
             startDetection() {
-                const detect = () => {
+                const detect = async () => {
                     if (this.isDemoMode && !this.isPlayingBack) {
+                        // デモモードは従来通り
                         this.detectMotion();
+                        this.updateHeatmap();
+                        this.recordHeatmapFrame();
+                    } else if (this.video.readyState === this.video.HAVE_ENOUGH_DATA && !this.isPlayingBack) {
+                        if (this.modelLoaded) {
+                            // AI検出モード
+                            await this.detectPeopleWithAI();
+                        } else {
+                            // AIなしモード（基本的な動き検出）
+                            this.detectMotion();
+                        }
                         this.updateHeatmap();
                         this.recordHeatmapFrame();
                     }
@@ -952,6 +1072,90 @@
                 }
                 
                 this.recordedFrames.textContent = this.heatmapHistory.length;
+                
+                // AI状態の更新
+                if (!this.aiStatus.textContent.includes('準備完了') && !this.aiStatus.textContent.includes('エラー') && !this.aiStatus.textContent.includes('オフライン')) {
+                    if (this.modelLoaded) {
+                        this.aiStatus.textContent = '準備完了';
+                        this.aiStatus.style.color = '#4CAF50';
+                    }
+                }
+            }
+            
+            async detectPeopleWithAI() {
+                try {
+                    // ビデオフレームを隠しキャンバスに描画
+                    this.detectionCtx.drawImage(this.video, 0, 0, 640, 480);
+                    
+                    // AI による物体検出
+                    const predictions = await this.model.detect(this.detectionCanvas);
+                    
+                    // 人のみをフィルタリング
+                    const people = predictions.filter(prediction => 
+                        prediction.class === 'person' && prediction.score > 0.5
+                    );
+                    
+                    // 検出された人の中心点を計算
+                    const detections = people.map(person => {
+                        const [x, y, width, height] = person.bbox;
+                        return {
+                            x: x + width / 2,
+                            y: y + height / 2,
+                            confidence: person.score,
+                            bbox: person.bbox
+                        };
+                    });
+                    
+                    // 統計更新
+                    this.stats.currentPeople = detections.length;
+                    this.stats.totalDetections += detections.length;
+                    
+                    if (detections.length > this.stats.peakActivity) {
+                        this.stats.peakActivity = detections.length;
+                    }
+                    
+                    // ヒートマップデータ更新
+                    this.updateHeatmapData(detections);
+                    
+                    // 検出結果をコンソールに出力（デバッグ用）
+                    if (detections.length > 0) {
+                        console.log(`${detections.length}人を検出しました`);
+                    }
+                    
+                } catch (error) {
+                    console.error('AI検出エラー:', error);
+                }
+            }
+            
+            updateHeatmapData(detections) {
+                const currentTime = Date.now();
+                
+                // 検出データをヒートマップに追加
+                detections.forEach(detection => {
+                    const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
+                    if (!this.heatmapData[key]) {
+                        this.heatmapData[key] = {
+                            count: 0,
+                            x: Math.floor(detection.x / 20) * 20,
+                            y: Math.floor(detection.y / 20) * 20,
+                            lastUpdate: currentTime
+                        };
+                    }
+                    this.heatmapData[key].count += detection.confidence || 1;
+                    this.heatmapData[key].lastUpdate = currentTime;
+                });
+                
+                // 古いデータの減衰処理
+                Object.keys(this.heatmapData).forEach(key => {
+                    const data = this.heatmapData[key];
+                    const timeDiff = currentTime - data.lastUpdate;
+                    if (timeDiff > 10000) { // 10秒後に減衰開始
+                        data.count = Math.max(0, data.count - 0.05);
+                        if (data.count <= 0) {
+                            delete this.heatmapData[key];
+                        }
+                    }
+                });
             }
         }
         
