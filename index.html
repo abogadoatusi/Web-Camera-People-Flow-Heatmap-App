@@ -271,7 +271,7 @@
             <button id="recordBtn" class="btn btn-info" disabled>🔴 記録開始</button>
             <button id="playbackBtn" class="btn btn-info" disabled>⏯️ タイムラプス再生</button>
             <button id="downloadBtn" class="btn btn-info" disabled>💾 JSON保存</button>
-            <button id="downloadVideoBtn" class="btn btn-info" disabled>🎥 動画保存</button>
+            <button id="downloadVideoBtn" class="btn btn-info" disabled>🎥 合成動画保存</button>
         </div>
 
         <div class="video-container">
@@ -412,6 +412,7 @@
                 this.mediaRecorder = null;
                 this.recordedChunks = [];
                 this.videoFrames = [];
+                this.cameraFrames = []; // カメラ映像フレーム追加
                 
                 this.setupCanvas();
                 this.loadAIModel();
@@ -707,10 +708,11 @@
                 this.recordingStartTime = Date.now();
                 this.heatmapHistory = [];
                 this.videoFrames = [];
+                this.cameraFrames = []; // カメラフレームも初期化
                 this.lastRecordTime = 0;
                 
                 this.recordBtn.textContent = '⏹️ 記録停止';
-                this.showStatus('人流データの記録を開始しました', 'success');
+                this.showStatus('人流データと映像の記録を開始しました', 'success');
             }
             
             stopRecording() {
@@ -749,11 +751,35 @@
             }
             
             recordVideoFrame() {
-                const imageData = this.canvas.toDataURL('image/png');
+                // ヒートマップキャンバスの画像データを保存
+                const heatmapImageData = this.canvas.toDataURL('image/png');
                 this.videoFrames.push({
                     timestamp: Date.now() - this.recordingStartTime,
-                    imageData: imageData
+                    imageData: heatmapImageData
                 });
+            }
+            
+            recordCameraFrame() {
+                if (!this.isDemoMode && this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
+                    // 実際のカメラ映像をキャンバスに描画して保存
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = 640;
+                    tempCanvas.height = 480;
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCtx.drawImage(this.video, 0, 0, 640, 480);
+                    
+                    const cameraImageData = tempCanvas.toDataURL('image/png');
+                    this.cameraFrames.push({
+                        timestamp: Date.now() - this.recordingStartTime,
+                        imageData: cameraImageData
+                    });
+                } else if (this.isDemoMode && this.demoCanvas) {
+                    // デモモードの場合は背景画像を保存
+                    this.cameraFrames.push({
+                        timestamp: Date.now() - this.recordingStartTime,
+                        imageData: this.demoCanvas.src
+                    });
+                }
             }
             
             startPlayback() {
@@ -833,13 +859,111 @@
             }
             
             async downloadVideo() {
-                if (this.videoFrames.length === 0) {
+                if (this.videoFrames.length === 0 || this.cameraFrames.length === 0) {
                     this.showStatus('動画データがありません', 'error');
                     return;
                 }
                 
-                this.showStatus('動画を生成中...', 'success');
+                this.showStatus('合成動画を生成中...', 'success');
                 
+                try {
+                    // 合成用のキャンバスを作成
+                    const compositeCanvas = document.createElement('canvas');
+                    compositeCanvas.width = 640;
+                    compositeCanvas.height = 480;
+                    const compositeCtx = compositeCanvas.getContext('2d');
+                    
+                    const stream = compositeCanvas.captureStream(10);
+                    const mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'video/webm'
+                    });
+                    
+                    const chunks = [];
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            chunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(chunks, { type: 'video/webm' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `people-flow-composite-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        
+                        this.showStatus('合成動画をダウンロードしました', 'success');
+                    };
+                    
+                    mediaRecorder.start();
+                    
+                    // 各フレームを合成して描画
+                    const frameCount = Math.min(this.videoFrames.length, this.cameraFrames.length);
+                    
+                    for (let i = 0; i < frameCount; i++) {
+                        const cameraFrame = this.cameraFrames[i];
+                        const heatmapFrame = this.videoFrames[i];
+                        
+                        // カメラ映像を描画
+                        const cameraImg = new Image();
+                        await new Promise((resolve) => {
+                            cameraImg.onload = () => {
+                                compositeCtx.clearRect(0, 0, 640, 480);
+                                compositeCtx.drawImage(cameraImg, 0, 0, 640, 480);
+                                resolve();
+                            };
+                            cameraImg.src = cameraFrame.imageData;
+                        });
+                        
+                        // ヒートマップを半透明で重ねる
+                        const heatmapImg = new Image();
+                        await new Promise((resolve) => {
+                            heatmapImg.onload = () => {
+                                compositeCtx.globalAlpha = this.heatmapOpacity;
+                                compositeCtx.drawImage(heatmapImg, 0, 0, 640, 480);
+                                compositeCtx.globalAlpha = 1.0;
+                                resolve();
+                            };
+                            heatmapImg.src = heatmapFrame.imageData;
+                        });
+                        
+                        // フレーム情報をオーバーレイ
+                        compositeCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                        compositeCtx.fillRect(10, 10, 200, 60);
+                        compositeCtx.fillStyle = 'white';
+                        compositeCtx.font = '14px Arial';
+                        compositeCtx.fillText(`フレーム: ${i + 1}/${frameCount}`, 20, 30);
+                        
+                        const minutes = Math.floor(heatmapFrame.timestamp / 60000);
+                        const seconds = Math.floor((heatmapFrame.timestamp % 60000) / 1000);
+                        compositeCtx.fillText(`時間: ${minutes}:${seconds.toString().padStart(2, '0')}`, 20, 50);
+                        
+                        // フレーム間の待機時間
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                    
+                    mediaRecorder.stop();
+                    
+                } catch (error) {
+                    console.error('合成動画生成エラー:', error);
+                    this.showStatus('合成動画生成に失敗しました。分離ファイルを保存します', 'error');
+                    this.downloadSeparateVideos();
+                }
+            }
+            
+            downloadSeparateVideos() {
+                // ヒートマップのみの動画
+                this.downloadHeatmapVideo();
+                
+                // カメラ映像のみの画像
+                this.downloadCameraFrames();
+            }
+            
+            async downloadHeatmapVideo() {
                 try {
                     const tempCanvas = document.createElement('canvas');
                     tempCanvas.width = 640;
@@ -863,13 +987,11 @@
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = `people-flow-heatmap-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+                        a.download = `people-flow-heatmap-only-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
-                        
-                        this.showStatus('動画をダウンロードしました', 'success');
                     };
                     
                     mediaRecorder.start();
@@ -891,22 +1013,22 @@
                     }
                     
                     mediaRecorder.stop();
-                    
                 } catch (error) {
-                    console.error('動画生成エラー:', error);
-                    this.showStatus('動画生成に失敗しました。PNGファイルを保存します', 'error');
-                    this.downloadPNG();
+                    console.error('ヒートマップ動画生成エラー:', error);
                 }
             }
             
-            downloadPNG() {
-                const firstFrame = this.videoFrames[0];
-                const a = document.createElement('a');
-                a.href = firstFrame.imageData;
-                a.download = `people-flow-sample-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+            downloadCameraFrames() {
+                // カメラフレームの最初の画像をダウンロード
+                if (this.cameraFrames.length > 0) {
+                    const firstFrame = this.cameraFrames[0];
+                    const a = document.createElement('a');
+                    a.href = firstFrame.imageData;
+                    a.download = `camera-sample-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }
             }
             
             startDetection() {
