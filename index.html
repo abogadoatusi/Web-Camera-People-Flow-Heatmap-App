@@ -523,26 +523,54 @@
                     const devices = await navigator.mediaDevices.enumerateDevices();
                     const videoDevices = devices.filter(device => device.kind === 'videoinput');
                     
+                    console.log('利用可能なカメラデバイス:', videoDevices);
+                    
                     if (videoDevices.length === 0) {
                         throw new Error('カメラデバイスが見つかりませんでした');
                     }
                     
                     this.showStatus('カメラへのアクセス許可を求めています...', 'success');
                     
-                    this.stream = await navigator.mediaDevices.getUserMedia({
+                    // より詳細なカメラ設定
+                    const constraints = {
                         video: {
-                            width: { ideal: 640 },
-                            height: { ideal: 480 },
-                            facingMode: 'user'
-                        }
-                    });
+                            width: { ideal: 640, min: 320 },
+                            height: { ideal: 480, min: 240 },
+                            frameRate: { ideal: 30, min: 15 },
+                            facingMode: { ideal: 'user' }, // フロントカメラを優先
+                            aspectRatio: { ideal: 4/3 }
+                        },
+                        audio: false
+                    };
+                    
+                    console.log('カメラ制約:', constraints);
+                    
+                    this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    
+                    console.log('カメラストリーム取得成功:', this.stream);
+                    console.log('ビデオトラック設定:', this.stream.getVideoTracks()[0]?.getSettings());
                     
                     this.video.srcObject = this.stream;
                     this.stats.startTime = Date.now();
                     this.isDemoMode = false;
                     
+                    // ビデオの読み込み完了を待つ
                     this.video.addEventListener('loadedmetadata', () => {
+                        console.log('ビデオメタデータ読み込み完了');
+                        console.log('ビデオサイズ:', this.video.videoWidth, 'x', this.video.videoHeight);
                         this.startDetection();
+                    });
+                    
+                    // ビデオが再生開始されたら確認
+                    this.video.addEventListener('playing', () => {
+                        console.log('ビデオ再生開始');
+                        this.showStatus('カメラ映像が表示されています。記録を開始できます。', 'success');
+                    });
+                    
+                    // エラーハンドリング
+                    this.video.addEventListener('error', (e) => {
+                        console.error('ビデオエラー:', e);
+                        this.showStatus('ビデオの表示でエラーが発生しました', 'error');
                     });
                     
                     this.startBtn.disabled = true;
@@ -551,9 +579,9 @@
                     this.recordBtn.disabled = false;
                     
                     if (this.modelLoaded) {
-                        this.showStatus('AI人検出カメラが開始されました！', 'success');
+                        this.showStatus('AI人検出カメラが開始されました！カメラ映像が表示されるまでお待ちください。', 'success');
                     } else {
-                        this.showStatus('カメラが開始されました（AI機能は無効）', 'success');
+                        this.showStatus('カメラが開始されました（AI機能は無効）。カメラ映像が表示されるまでお待ちください。', 'success');
                     }
                 } catch (error) {
                     console.error('カメラアクセスエラー:', error);
@@ -561,13 +589,17 @@
                     let errorMessage = 'カメラにアクセスできませんでした。';
                     
                     if (error.name === 'NotAllowedError') {
-                        errorMessage = 'カメラのアクセス許可が拒否されました。ブラウザの設定でカメラを許可するか、デモモードをお試しください。';
+                        errorMessage = 'カメラのアクセス許可が拒否されました。ブラウザのアドレスバーのカメラアイコンをクリックして許可してください。';
                     } else if (error.name === 'NotFoundError') {
                         errorMessage = 'カメラデバイスが見つかりませんでした。カメラが接続されているか確認してください。';
                     } else if (error.name === 'NotReadableError') {
-                        errorMessage = 'カメラが他のアプリケーションで使用中です。';
+                        errorMessage = 'カメラが他のアプリケーションで使用中です。他のアプリを閉じてください。';
                     } else if (error.name === 'OverconstrainedError') {
-                        errorMessage = 'カメラの設定に問題があります。';
+                        errorMessage = 'カメラの設定に問題があります。別のカメラを試すか、制約を緩和します。';
+                        
+                        // 制約を緩和して再試行
+                        this.retryWithRelaxedConstraints();
+                        return;
                     }
                     
                     this.showStatus(errorMessage, 'error');
@@ -576,6 +608,27 @@
                     setTimeout(() => {
                         this.showStatus('カメラが使用できない場合は、デモモードをお試しください', 'success');
                     }, 5000);
+                }
+            }
+            
+            async retryWithRelaxedConstraints() {
+                try {
+                    console.log('制約を緩和してカメラアクセスを再試行');
+                    
+                    // より緩い制約で再試行
+                    const relaxedConstraints = {
+                        video: true, // シンプルな設定
+                        audio: false
+                    };
+                    
+                    this.stream = await navigator.mediaDevices.getUserMedia(relaxedConstraints);
+                    this.video.srcObject = this.stream;
+                    
+                    this.showStatus('カメラアクセス成功（制約緩和）', 'success');
+                    
+                } catch (retryError) {
+                    console.error('再試行も失敗:', retryError);
+                    this.showStatus('カメラアクセスに失敗しました。デモモードをお試しください。', 'error');
                 }
             }
             
@@ -764,6 +817,11 @@
             }
             
             recordCameraFrame() {
+                if (!this.isRecording) {
+                    console.log('記録停止中のためカメラフレームをスキップ');
+                    return;
+                }
+                
                 if (!this.isDemoMode && this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
                     // 実際のカメラ映像をキャンバスに描画して保存
                     const tempCanvas = document.createElement('canvas');
@@ -771,27 +829,51 @@
                     tempCanvas.height = 480;
                     const tempCtx = tempCanvas.getContext('2d');
                     
-                    // ビデオをキャンバスに描画
-                    tempCtx.drawImage(this.video, 0, 0, 640, 480);
-                    
-                    const cameraImageData = tempCanvas.toDataURL('image/png');
-                    this.cameraFrames.push({
-                        timestamp: Date.now() - this.recordingStartTime,
-                        imageData: cameraImageData
-                    });
-                    
-                    console.log(`カメラフレーム ${this.cameraFrames.length} を記録しました`);
+                    try {
+                        // ビデオをキャンバスに描画
+                        tempCtx.drawImage(this.video, 0, 0, 640, 480);
+                        
+                        const cameraImageData = tempCanvas.toDataURL('image/png');
+                        this.cameraFrames.push({
+                            timestamp: Date.now() - this.recordingStartTime,
+                            imageData: cameraImageData,
+                            frameIndex: this.cameraFrames.length
+                        });
+                        
+                        console.log(`✅ カメラフレーム ${this.cameraFrames.length} を記録しました (${Math.round((Date.now() - this.recordingStartTime) / 1000)}秒)`);
+                        
+                    } catch (error) {
+                        console.error('カメラフレーム記録エラー:', error);
+                        // エラー時はダミーフレームを追加
+                        this.cameraFrames.push({
+                            timestamp: Date.now() - this.recordingStartTime,
+                            imageData: null,
+                            frameIndex: this.cameraFrames.length,
+                            error: true
+                        });
+                    }
                     
                 } else if (this.isDemoMode && this.demoCanvas) {
                     // デモモードの場合は背景画像を保存
                     this.cameraFrames.push({
                         timestamp: Date.now() - this.recordingStartTime,
-                        imageData: this.demoCanvas.src
+                        imageData: this.demoCanvas.src,
+                        frameIndex: this.cameraFrames.length,
+                        isDemo: true
                     });
                     
-                    console.log(`デモフレーム ${this.cameraFrames.length} を記録しました`);
+                    console.log(`🎬 デモフレーム ${this.cameraFrames.length} を記録しました`);
+                    
                 } else {
-                    console.warn('カメラフレームを記録できませんでした - ビデオ準備未完了');
+                    console.warn(`⚠️ カメラフレームを記録できませんでした - デモ:${this.isDemoMode}, ビデオ準備:${this.video.readyState}, データ:${this.video.HAVE_ENOUGH_DATA}`);
+                    
+                    // フレーム同期のためnullフレームを追加
+                    this.cameraFrames.push({
+                        timestamp: Date.now() - this.recordingStartTime,
+                        imageData: null,
+                        frameIndex: this.cameraFrames.length,
+                        skipped: true
+                    });
                 }
             }
             
