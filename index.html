@@ -488,6 +488,9 @@
                 this.bindEvents();
                 this.startStatsUpdater();
                 this.updateTimelapseInfo();
+                
+                // 初期ステータスメッセージを表示
+                this.showStatus('AI人検出システム準備中...', 'success');
             }
             
             setupCanvas() {
@@ -610,11 +613,11 @@
             showStatus(message, type = 'success') {
                 this.status.textContent = message;
                 this.status.className = `status ${type}`;
+                
+                // ステータスを常に表示状態に保つ
                 this.status.style.display = 'block';
                 
-                setTimeout(() => {
-                    this.status.style.display = 'none';
-                }, 3000);
+                // 自動非表示はしない（必要に応じて手動で非表示にする）
             }
             
             async startCamera() {
@@ -659,9 +662,9 @@
                     this.recordBtn.disabled = false;
                     
                     if (this.modelLoaded) {
-                        this.showStatus('AI人検出カメラが開始されました！', 'success');
+                        this.showStatus('AI人検出カメラ開始 - 記録ボタンでタイムラプス記録を開始できます', 'success');
                     } else {
-                        this.showStatus('カメラが開始されました（AI機能は無効）', 'success');
+                        this.showStatus('カメラ開始（AI機能は無効） - 記録ボタンでタイムラプス記録を開始できます', 'success');
                     }
                 } catch (error) {
                     console.error('カメラアクセスエラー:', error);
@@ -681,7 +684,7 @@
                 this.stopBtn.disabled = false;
                 this.recordBtn.disabled = false;
                 
-                this.showStatus('デモモードが開始されました！', 'success');
+                this.showStatus('デモモード開始 - 仮想的な人流データを表示中', 'success');
             }
             
             createDemoVideo() {
@@ -820,7 +823,7 @@
                 this.recordBtn.textContent = '⏹️ 記録停止';
                 
                 const ratio = this.timelapseInfo.textContent;
-                this.showStatus(`タイムラプス記録開始！間隔:${this.recordingInterval}ms, 圧縮比:${ratio}`, 'success');
+                this.showStatus(`タイムラプス記録中... 間隔:${this.recordingInterval}ms, 圧縮比:${ratio}`, 'success');
             }
             
             stopRecording() {
@@ -836,9 +839,9 @@
                     const expectedVideoDuration = Math.floor(this.heatmapHistory.length / parseInt(this.videoFpsSelect.value));
                     const compressionRatio = this.timelapseInfo.textContent;
                     
-                    this.showStatus(`タイムラプス記録完了！${recordDuration}秒→約${expectedVideoDuration}秒動画 (圧縮比${compressionRatio})`, 'success');
+                    this.showStatus(`記録完了！${recordDuration}秒→約${expectedVideoDuration}秒動画 (圧縮比${compressionRatio}) - タイムラプス動画を保存できます`, 'success');
                 } else {
-                    this.showStatus('記録データがありません', 'error');
+                    this.showStatus('記録データがありません - 記録を開始してください', 'error');
                 }
             }
             
@@ -1200,25 +1203,113 @@
                             }
                             
                             // タイムラプス情報を表示
-                            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-                            ctx.fillRect(10, 10, 380, 130);
+                            const captionX = 10;
+                            const captionY = 10;
+                            const captionW = 380;
+                            const captionH = 130;
+                            
+                            ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+                            ctx.fillRect(captionX, captionY, captionW, captionH);
+                            
+                            // 少し待ってからテキストを描画
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                            
+                            // フォントを設定してテキストを描画
                             ctx.fillStyle = 'white';
                             ctx.font = 'bold 16px Arial';
-                            ctx.fillText(`🎬 タイムラプス動画`, 20, 35);
+                            ctx.textBaseline = 'top';
+                            
+                            const titleText = `🎬 タイムラプス動画`;
+                            ctx.fillText(titleText, captionX + 10, captionY + 10);
                             
                             ctx.font = 'bold 14px Arial';
-                            ctx.fillText(`Frame: ${i + 1}/${validCameraFrames.length}`, 20, 60);
+                            const frameText = `Frame: ${i + 1}/${validCameraFrames.length}`;
+                            ctx.fillText(frameText, captionX + 10, captionY + 35);
                             
                             const timestamp = cameraFrame.timestamp;
                             const minutes = Math.floor(timestamp / 60000);
                             const seconds = Math.floor((timestamp % 60000) / 1000);
-                            ctx.fillText(`Time: ${minutes}:${seconds.toString().padStart(2, '0')}`, 20, 85);
+                            const timeText = `Time: ${minutes}:${seconds.toString().padStart(2, '0')}`;
+                            ctx.fillText(timeText, captionX + 10, captionY + 60);
                             
-                            ctx.fillText(`Camera: ${cameraStatus}`, 20, 110);
-                            ctx.fillText(`圧縮比: ${compressionRatio}`, 200, 110);
+                            const cameraText = `Camera: ${cameraStatus}`;
+                            ctx.fillText(cameraText, captionX + 10, captionY + 85);
+                            
+                            const ratioText = `圧縮比: ${compressionRatio}`;
+                            ctx.fillText(ratioText, captionX + 190, captionY + 85);
+                            
+                            // テキスト描画完了を待機
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                            
+                            // より厳密なキャプション品質チェック
+                            const imageData = ctx.getImageData(captionX, captionY, captionW, captionH);
+                            const pixels = imageData.data;
+                            let whitePixelCount = 0;
+                            let totalPixels = pixels.length / 4;
+                            
+                            // 白いピクセル（テキスト）の数をカウント
+                            for (let j = 0; j < pixels.length; j += 4) {
+                                const r = pixels[j];
+                                const g = pixels[j + 1];
+                                const b = pixels[j + 2];
+                                const a = pixels[j + 3];
+                                
+                                if (a > 240 && r > 240 && g > 240 && b > 240) {
+                                    whitePixelCount++;
+                                }
+                            }
+                            
+                            const whitePixelRatio = whitePixelCount / totalPixels;
+                            
+                            // より厳しい基準：白いピクセルが全体の1%以上でかつ500ピクセル以上
+                            if (whitePixelCount < 500 || whitePixelRatio < 0.01) {
+                                console.log(`⏭️ フレーム ${i}: キャプション品質不十分でスキップ (白ピクセル: ${whitePixelCount}/${totalPixels}, 比率: ${(whitePixelRatio * 100).toFixed(2)}%)`);
+                                continue;
+                            }
+                            
+                            // さらに特定のテキストが含まれているかチェック
+                            const testCanvas = document.createElement('canvas');
+                            testCanvas.width = captionW;
+                            testCanvas.height = captionH;
+                            const testCtx = testCanvas.getContext('2d');
+                            
+                            // 同じスタイルでテスト用テキストを描画
+                            testCtx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+                            testCtx.fillRect(0, 0, captionW, captionH);
+                            testCtx.fillStyle = 'white';
+                            testCtx.font = 'bold 16px Arial';
+                            testCtx.textBaseline = 'top';
+                            testCtx.fillText('🎬 タイムラプス動画', 10, 10);
+                            
+                            const testImageData = testCtx.getImageData(0, 0, captionW, captionH);
+                            const testPixels = testImageData.data;
+                            let testWhitePixels = 0;
+                            
+                            for (let j = 0; j < testPixels.length; j += 4) {
+                                const r = testPixels[j];
+                                const g = testPixels[j + 1];
+                                const b = testPixels[j + 2];
+                                const a = testPixels[j + 3];
+                                
+                                if (a > 240 && r > 240 && g > 240 && b > 240) {
+                                    testWhitePixels++;
+                                }
+                            }
+                            
+                            // テスト描画と比較して、最低限のテキストが含まれているかチェック
+                            if (whitePixelCount < testWhitePixels * 0.5) {
+                                console.log(`⏭️ フレーム ${i}: テキスト密度不足でスキップ (実際: ${whitePixelCount}, 期待: ${testWhitePixels})`);
+                                continue;
+                            }
+                            
+                            console.log(`✅ フレーム ${i}: 高品質キャプション確認 (白ピクセル: ${whitePixelCount}, 比率: ${(whitePixelRatio * 100).toFixed(2)}%)`);
                             
                             const progress = Math.round((i / validCameraFrames.length) * 100);
-                            this.showStatus(`タイムラプス生成中... ${progress}% (${i + 1}/${validCameraFrames.length})`, 'success');
+                            
+                            // 進捗表示を10%刻みに制限
+                            if (progress % 10 === 0 || i === 0 || i === validCameraFrames.length - 1) {
+                                this.showStatus(`タイムラプス生成中... ${progress}% (${i + 1}/${validCameraFrames.length})`, 'success');
+                            }
                             
                         } catch (error) {
                             console.error(`フレーム ${i} 処理エラー:`, error);
