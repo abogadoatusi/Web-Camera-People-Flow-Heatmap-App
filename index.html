@@ -271,7 +271,7 @@
             <button id="recordBtn" class="btn btn-info" disabled>🔴 記録開始</button>
             <button id="playbackBtn" class="btn btn-info" disabled>⏯️ タイムラプス再生</button>
             <button id="downloadBtn" class="btn btn-info" disabled>💾 JSON保存</button>
-            <button id="downloadVideoBtn" class="btn btn-info" disabled>📸 合成画像保存</button>
+            <button id="downloadVideoBtn" class="btn btn-info" disabled>🎥 WebM動画保存</button>
         </div>
 
         <div class="video-container">
@@ -723,7 +723,7 @@
                     this.playbackBtn.disabled = false;
                     this.downloadBtn.disabled = false;
                     this.downloadVideoBtn.disabled = false;
-                    this.showStatus(`記録完了！${this.heatmapHistory.length}フレームが保存されました。合成画像の生成が可能です。`, 'success');
+                    this.showStatus(`記録完了！${this.heatmapHistory.length}フレームが保存されました。WebM動画生成が可能です。`, 'success');
                 } else {
                     this.showStatus('記録データがありません', 'error');
                 }
@@ -864,16 +864,159 @@
                     return;
                 }
                 
-                this.showStatus('合成動画を生成中...', 'success');
+                this.showStatus('WebM動画を生成中...', 'success');
                 
                 try {
-                    // シンプルな方法: 画像を連続ダウンロード
-                    await this.downloadFramesAsImages();
+                    // シンプルなキャンバスベースの動画生成
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 640;
+                    canvas.height = 480;
+                    const ctx = canvas.getContext('2d');
+                    
+                    // MediaRecorder設定
+                    const stream = canvas.captureStream(10); // 10fps
+                    const mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'video/webm'
+                    });
+                    
+                    const recordedChunks = [];
+                    
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            recordedChunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `people-flow-heatmap-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        
+                        this.showStatus('WebM動画をダウンロードしました', 'success');
+                    };
+                    
+                    // 録画開始
+                    mediaRecorder.start();
+                    
+                    // フレームを描画
+                    for (let i = 0; i < this.videoFrames.length; i++) {
+                        const frame = this.videoFrames[i];
+                        const img = new Image();
+                        
+                        await new Promise((resolve) => {
+                            img.onload = () => {
+                                // 背景をクリア
+                                ctx.fillStyle = '#e3f2fd';
+                                ctx.fillRect(0, 0, 640, 480);
+                                
+                                // カメラ映像があれば先に描画
+                                if (this.cameraFrames && this.cameraFrames[i]) {
+                                    const cameraImg = new Image();
+                                    cameraImg.onload = () => {
+                                        ctx.drawImage(cameraImg, 0, 0, 640, 480);
+                                        
+                                        // ヒートマップを半透明で重ね合わせ
+                                        ctx.globalAlpha = 0.7;
+                                        ctx.drawImage(img, 0, 0, 640, 480);
+                                        ctx.globalAlpha = 1.0;
+                                        
+                                        // 情報表示
+                                        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                                        ctx.fillRect(10, 10, 180, 50);
+                                        ctx.fillStyle = 'white';
+                                        ctx.font = '14px Arial';
+                                        ctx.fillText(`Frame: ${i + 1}/${this.videoFrames.length}`, 15, 30);
+                                        ctx.fillText(`Time: ${Math.floor(frame.timestamp / 1000)}s`, 15, 50);
+                                        
+                                        resolve();
+                                    };
+                                    cameraImg.src = this.cameraFrames[i].imageData;
+                                } else {
+                                    // ヒートマップのみ
+                                    ctx.drawImage(img, 0, 0, 640, 480);
+                                    
+                                    // 情報表示
+                                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                                    ctx.fillRect(10, 10, 180, 50);
+                                    ctx.fillStyle = 'white';
+                                    ctx.font = '14px Arial';
+                                    ctx.fillText(`Frame: ${i + 1}/${this.videoFrames.length}`, 15, 30);
+                                    ctx.fillText(`Time: ${Math.floor(frame.timestamp / 1000)}s`, 15, 50);
+                                    
+                                    resolve();
+                                }
+                            };
+                            img.src = frame.imageData;
+                        });
+                        
+                        // フレーム間の待機（重要：MediaRecorderが録画するために必要）
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                    
+                    // 録画停止
+                    setTimeout(() => {
+                        mediaRecorder.stop();
+                        stream.getTracks().forEach(track => track.stop());
+                    }, 500);
                     
                 } catch (error) {
-                    console.error('動画生成エラー:', error);
-                    this.showStatus('動画生成に失敗しました。画像フレームをダウンロードします', 'error');
-                    await this.downloadFramesAsImages();
+                    console.error('WebM動画生成エラー:', error);
+                    this.showStatus('WebM生成に失敗しました。別の方法を試します...', 'error');
+                    
+                    // フォールバック: シンプルなヒートマップのみの動画
+                    this.downloadSimpleVideo();
+                }
+            }
+            
+            async downloadSimpleVideo() {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 640;
+                    canvas.height = 480;
+                    const ctx = canvas.getContext('2d');
+                    
+                    const stream = canvas.captureStream(10);
+                    const mediaRecorder = new MediaRecorder(stream);
+                    
+                    const chunks = [];
+                    mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(chunks, { type: 'video/webm' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `heatmap-simple-${Date.now()}.webm`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        this.showStatus('シンプル動画をダウンロードしました', 'success');
+                    };
+                    
+                    mediaRecorder.start();
+                    
+                    for (const frame of this.videoFrames) {
+                        const img = new Image();
+                        await new Promise(resolve => {
+                            img.onload = () => {
+                                ctx.clearRect(0, 0, 640, 480);
+                                ctx.drawImage(img, 0, 0);
+                                resolve();
+                            };
+                            img.src = frame.imageData;
+                        });
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                    
+                    setTimeout(() => mediaRecorder.stop(), 200);
+                    
+                } catch (error) {
+                    console.error('シンプル動画生成もエラー:', error);
+                    this.showStatus('動画生成に失敗しました。ブラウザがWebM録画をサポートしていない可能性があります。', 'error');
                 }
             }
             
@@ -1238,7 +1381,6 @@
                     // ヒートマップデータ更新
                     this.updateHeatmapData(detections);
                     
-                    // 検出結果をコンソールに出力（デバッグ用）
                     // 検出結果をコンソールに出力（デバッグ用）
                     if (detections.length > 0) {
                         console.log(`${detections.length}人を検出しました`);
