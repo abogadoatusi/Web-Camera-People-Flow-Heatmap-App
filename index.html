@@ -412,7 +412,10 @@
                 this.mediaRecorder = null;
                 this.recordedChunks = [];
                 this.videoFrames = [];
-                this.cameraFrames = []; // カメラ映像フレーム追加
+                this.cameraFrames = [];
+                
+                // カメラの準備状態
+                this.videoReady = false;
                 
                 this.setupCanvas();
                 this.loadAIModel();
@@ -519,7 +522,6 @@
             
             async startCamera() {
                 try {
-                    // まずカメラデバイスの存在確認
                     const devices = await navigator.mediaDevices.enumerateDevices();
                     const videoDevices = devices.filter(device => device.kind === 'videoinput');
                     
@@ -531,13 +533,12 @@
                     
                     this.showStatus('カメラへのアクセス許可を求めています...', 'success');
                     
-                    // より詳細なカメラ設定
                     const constraints = {
                         video: {
                             width: { ideal: 640, min: 320 },
                             height: { ideal: 480, min: 240 },
                             frameRate: { ideal: 30, min: 15 },
-                            facingMode: { ideal: 'user' }, // フロントカメラを優先
+                            facingMode: { ideal: 'user' },
                             aspectRatio: { ideal: 4/3 }
                         },
                         audio: false
@@ -554,20 +555,23 @@
                     this.stats.startTime = Date.now();
                     this.isDemoMode = false;
                     
-                    // ビデオの読み込み完了を待つ
-                    this.video.addEventListener('loadedmetadata', () => {
-                        console.log('ビデオメタデータ読み込み完了');
-                        console.log('ビデオサイズ:', this.video.videoWidth, 'x', this.video.videoHeight);
+                    // 重要：ビデオの準備完了イベントを待つ
+                    this.video.addEventListener('loadeddata', () => {
+                        console.log('ビデオデータ読み込み完了');
+                        this.videoReady = true;
                         this.startDetection();
                     });
                     
-                    // ビデオが再生開始されたら確認
+                    this.video.addEventListener('loadedmetadata', () => {
+                        console.log('ビデオメタデータ読み込み完了');
+                        console.log('ビデオサイズ:', this.video.videoWidth, 'x', this.video.videoHeight);
+                    });
+                    
                     this.video.addEventListener('playing', () => {
                         console.log('ビデオ再生開始');
                         this.showStatus('カメラ映像が表示されています。記録を開始できます。', 'success');
                     });
                     
-                    // エラーハンドリング
                     this.video.addEventListener('error', (e) => {
                         console.error('ビデオエラー:', e);
                         this.showStatus('ビデオの表示でエラーが発生しました', 'error');
@@ -596,15 +600,12 @@
                         errorMessage = 'カメラが他のアプリケーションで使用中です。他のアプリを閉じてください。';
                     } else if (error.name === 'OverconstrainedError') {
                         errorMessage = 'カメラの設定に問題があります。別のカメラを試すか、制約を緩和します。';
-                        
-                        // 制約を緩和して再試行
                         this.retryWithRelaxedConstraints();
                         return;
                     }
                     
                     this.showStatus(errorMessage, 'error');
                     
-                    // 5秒後にデモモード提案
                     setTimeout(() => {
                         this.showStatus('カメラが使用できない場合は、デモモードをお試しください', 'success');
                     }, 5000);
@@ -615,9 +616,8 @@
                 try {
                     console.log('制約を緩和してカメラアクセスを再試行');
                     
-                    // より緩い制約で再試行
                     const relaxedConstraints = {
-                        video: true, // シンプルな設定
+                        video: true,
                         audio: false
                     };
                     
@@ -634,6 +634,7 @@
             
             startDemo() {
                 this.isDemoMode = true;
+                this.videoReady = true; // デモモードでは即座に準備完了
                 this.stats.startTime = Date.now();
                 this.createDemoVideo();
                 this.startDetection();
@@ -670,6 +671,8 @@
                 imgElement.style.top = '0';
                 imgElement.style.left = '0';
                 imgElement.style.zIndex = '1';
+                imgElement.style.width = '640px';
+                imgElement.style.height = '480px';
                 this.video.parentNode.insertBefore(imgElement, this.video);
                 this.demoCanvas = imgElement;
             }
@@ -680,12 +683,18 @@
                     this.animationId = null;
                 }
                 
+                if (this.stream) {
+                    this.stream.getTracks().forEach(track => track.stop());
+                    this.stream = null;
+                }
+                
                 if (this.demoCanvas) {
                     this.demoCanvas.remove();
                     this.demoCanvas = null;
                 }
                 
                 this.video.style.display = 'block';
+                this.videoReady = false;
                 this.isDemoMode = false;
                 
                 if (this.isRecording) {
@@ -709,6 +718,8 @@
             resetData() {
                 this.heatmapData = {};
                 this.heatmapHistory = [];
+                this.videoFrames = [];
+                this.cameraFrames = [];
                 this.stats = {
                     totalDetections: 0,
                     currentPeople: 0,
@@ -725,7 +736,7 @@
                 this.updateStatsDisplay();
                 
                 this.recordBtn.textContent = '🔴 記録開始';
-                this.recordBtn.disabled = !this.isDemoMode;
+                this.recordBtn.disabled = !this.videoReady;
                 this.playbackBtn.disabled = true;
                 this.downloadBtn.disabled = true;
                 this.downloadVideoBtn.disabled = true;
@@ -761,7 +772,7 @@
                 this.recordingStartTime = Date.now();
                 this.heatmapHistory = [];
                 this.videoFrames = [];
-                this.cameraFrames = []; // カメラフレームも初期化
+                this.cameraFrames = [];
                 this.lastRecordTime = 0;
                 
                 this.recordBtn.textContent = '⏹️ 記録停止';
@@ -811,15 +822,20 @@
                 this.heatmapHistory.push(frameData);
                 this.lastRecordTime = currentTime;
                 
+                // ヒートマップと同時にカメラフレームも記録
                 this.recordVideoFrame();
+                this.recordCameraFrame();
             }
             
             recordVideoFrame() {
+                if (!this.isRecording) return;
+                
                 // ヒートマップキャンバスの画像データを保存
                 const heatmapImageData = this.canvas.toDataURL('image/png');
                 this.videoFrames.push({
                     timestamp: Date.now() - this.recordingStartTime,
-                    imageData: heatmapImageData
+                    imageData: heatmapImageData,
+                    frameIndex: this.videoFrames.length
                 });
             }
             
@@ -828,60 +844,75 @@
                     return;
                 }
                 
-                console.log(`🎥 カメラフレーム記録試行 - デモ:${this.isDemoMode}, ビデオ準備:${this.video.readyState}`);
+                console.log(`🎥 カメラフレーム記録試行 - デモ:${this.isDemoMode}, ビデオ準備:${this.videoReady}, readyState:${this.video.readyState}`);
                 
-                if (!this.isDemoMode) {
+                if (this.isDemoMode && this.demoCanvas) {
+                    // デモモードの場合
+                    try {
+                        this.cameraFrames.push({
+                            timestamp: Date.now() - this.recordingStartTime,
+                            imageData: this.demoCanvas.src,
+                            frameIndex: this.cameraFrames.length,
+                            isDemo: true,
+                            width: 640,
+                            height: 480
+                        });
+                        console.log(`✅ デモフレーム ${this.cameraFrames.length} 記録完了`);
+                        return;
+                    } catch (error) {
+                        console.error('❌ デモフレーム記録エラー:', error);
+                    }
+                } else if (!this.isDemoMode && this.videoReady) {
                     // 実際のカメラ映像の場合
-                    if (this.video && this.video.readyState >= 2) { // HAVE_CURRENT_DATA以上
-                        try {
+                    try {
+                        // より厳密なビデオ準備状態チェック
+                        if (this.video && 
+                            this.video.readyState >= 2 && // HAVE_CURRENT_DATA以上
+                            this.video.videoWidth > 0 && 
+                            this.video.videoHeight > 0) {
+                            
                             const tempCanvas = document.createElement('canvas');
                             tempCanvas.width = 640;
                             tempCanvas.height = 480;
                             const tempCtx = tempCanvas.getContext('2d');
                             
-                            // ビデオが実際に映像データを持っているか確認
-                            if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
-                                tempCtx.drawImage(this.video, 0, 0, 640, 480);
-                                
-                                const cameraImageData = tempCanvas.toDataURL('image/png');
+                            // ビデオフレームをキャンバスに描画
+                            tempCtx.drawImage(this.video, 0, 0, 640, 480);
+                            
+                            // データURLに変換してテスト
+                            const cameraImageData = tempCanvas.toDataURL('image/png');
+                            
+                            // 空のデータでないことを確認
+                            if (cameraImageData && cameraImageData.length > 1000) {
                                 this.cameraFrames.push({
                                     timestamp: Date.now() - this.recordingStartTime,
                                     imageData: cameraImageData,
                                     frameIndex: this.cameraFrames.length,
                                     videoWidth: this.video.videoWidth,
-                                    videoHeight: this.video.videoHeight
+                                    videoHeight: this.video.videoHeight,
+                                    readyState: this.video.readyState
                                 });
                                 
                                 console.log(`✅ リアルカメラフレーム ${this.cameraFrames.length} 記録完了 (${this.video.videoWidth}x${this.video.videoHeight})`);
                                 return;
                             } else {
-                                console.warn('⚠️ ビデオサイズが0 - 映像データなし');
+                                console.warn('⚠️ カメラデータが空または小さすぎます');
                             }
-                        } catch (error) {
-                            console.error('❌ カメラフレーム描画エラー:', error);
+                        } else {
+                            console.warn(`⚠️ ビデオ準備不完了 - readyState: ${this.video.readyState}, size: ${this.video.videoWidth}x${this.video.videoHeight}`);
                         }
-                    } else {
-                        console.warn(`⚠️ ビデオ準備不完了 - readyState: ${this.video.readyState}`);
+                    } catch (error) {
+                        console.error('❌ カメラフレーム描画エラー:', error);
                     }
-                } else if (this.isDemoMode && this.demoCanvas) {
-                    // デモモードの場合
-                    this.cameraFrames.push({
-                        timestamp: Date.now() - this.recordingStartTime,
-                        imageData: this.demoCanvas.src,
-                        frameIndex: this.cameraFrames.length,
-                        isDemo: true
-                    });
-                    console.log(`🎬 デモフレーム ${this.cameraFrames.length} 記録完了`);
-                    return;
                 }
                 
-                // フレーム同期のためのnullフレーム追加
+                // フレーム同期のためのプレースホルダー追加
                 this.cameraFrames.push({
                     timestamp: Date.now() - this.recordingStartTime,
                     imageData: null,
                     frameIndex: this.cameraFrames.length,
                     skipped: true,
-                    reason: `デモ:${this.isDemoMode}, readyState:${this.video.readyState}, size:${this.video.videoWidth}x${this.video.videoHeight}`
+                    reason: `デモ:${this.isDemoMode}, 準備:${this.videoReady}, readyState:${this.video.readyState}, size:${this.video.videoWidth}x${this.video.videoHeight}`
                 });
                 console.log(`⏭️ カメラフレーム ${this.cameraFrames.length} スキップ (同期維持)`);
             }
@@ -968,7 +999,6 @@
                     return;
                 }
                 
-                // デバッグ情報を表示
                 console.log('動画生成開始:');
                 console.log('- ヒートマップフレーム数:', this.videoFrames.length);
                 console.log('- カメラフレーム数:', this.cameraFrames.length);
@@ -977,7 +1007,6 @@
                 this.showStatus(`WebM動画を生成中... (${this.videoFrames.length}フレーム)`, 'success');
                 
                 try {
-                    // シンプルなキャンバスベースの動画生成
                     const canvas = document.createElement('canvas');
                     canvas.width = 640;
                     canvas.height = 480;
@@ -1026,7 +1055,7 @@
                     
                     for (let i = 0; i < frameCount; i++) {
                         try {
-                            // 背景をクリア
+                            // 背景をクリア（グレーの背景）
                             ctx.fillStyle = '#f0f0f0';
                             ctx.fillRect(0, 0, 640, 480);
                             
@@ -1036,28 +1065,35 @@
                             // カメラ映像を先に描画
                             if (this.cameraFrames && this.cameraFrames[i] && this.cameraFrames[i].imageData) {
                                 console.log(`🎥 フレーム ${i}: カメラ映像を描画中...`);
-                                const cameraImg = new Image();
                                 
-                                await new Promise((resolve) => {
-                                    cameraImg.onload = () => {
-                                        try {
-                                            ctx.drawImage(cameraImg, 0, 0, 640, 480);
-                                            cameraDrawn = true;
-                                            cameraStatus = '✅ 表示';
-                                            console.log(`✅ フレーム ${i}: カメラ映像描画完了`);
-                                        } catch (drawError) {
-                                            console.error(`❌ フレーム ${i}: カメラ描画エラー:`, drawError);
-                                            cameraStatus = '❌ 描画エラー';
-                                        }
-                                        resolve();
-                                    };
-                                    cameraImg.onerror = () => {
-                                        console.error(`❌ フレーム ${i}: カメラ画像読み込みエラー`);
-                                        cameraStatus = '❌ 読込エラー';
-                                        resolve();
-                                    };
-                                    cameraImg.src = this.cameraFrames[i].imageData;
-                                });
+                                try {
+                                    const cameraImg = new Image();
+                                    
+                                    await new Promise((resolve, reject) => {
+                                        cameraImg.onload = () => {
+                                            try {
+                                                ctx.drawImage(cameraImg, 0, 0, 640, 480);
+                                                cameraDrawn = true;
+                                                cameraStatus = '✅ 表示';
+                                                console.log(`✅ フレーム ${i}: カメラ映像描画完了`);
+                                                resolve();
+                                            } catch (drawError) {
+                                                console.error(`❌ フレーム ${i}: カメラ描画エラー:`, drawError);
+                                                cameraStatus = '❌ 描画エラー';
+                                                resolve();
+                                            }
+                                        };
+                                        cameraImg.onerror = (error) => {
+                                            console.error(`❌ フレーム ${i}: カメラ画像読み込みエラー:`, error);
+                                            cameraStatus = '❌ 読込エラー';
+                                            resolve();
+                                        };
+                                        cameraImg.src = this.cameraFrames[i].imageData;
+                                    });
+                                } catch (error) {
+                                    console.error(`❌ フレーム ${i}: カメラ処理エラー:`, error);
+                                    cameraStatus = '❌ 処理エラー';
+                                }
                             } else {
                                 const cameraFrame = this.cameraFrames[i];
                                 if (cameraFrame) {
@@ -1079,22 +1115,31 @@
                             // ヒートマップを重ね合わせ
                             const frame = this.videoFrames[i];
                             if (frame && frame.imageData) {
-                                const heatmapImg = new Image();
-                                
-                                await new Promise((resolve) => {
-                                    heatmapImg.onload = () => {
-                                        ctx.globalAlpha = 0.7;
-                                        ctx.drawImage(heatmapImg, 0, 0, 640, 480);
-                                        ctx.globalAlpha = 1.0;
-                                        console.log(`🔥 フレーム ${i}: ヒートマップ描画完了`);
-                                        resolve();
-                                    };
-                                    heatmapImg.onerror = () => {
-                                        console.error(`❌ フレーム ${i}: ヒートマップ画像読み込みエラー`);
-                                        resolve();
-                                    };
-                                    heatmapImg.src = frame.imageData;
-                                });
+                                try {
+                                    const heatmapImg = new Image();
+                                    
+                                    await new Promise((resolve, reject) => {
+                                        heatmapImg.onload = () => {
+                                            try {
+                                                ctx.globalAlpha = 0.7;
+                                                ctx.drawImage(heatmapImg, 0, 0, 640, 480);
+                                                ctx.globalAlpha = 1.0;
+                                                console.log(`🔥 フレーム ${i}: ヒートマップ描画完了`);
+                                                resolve();
+                                            } catch (error) {
+                                                console.error(`❌ フレーム ${i}: ヒートマップ描画エラー:`, error);
+                                                resolve();
+                                            }
+                                        };
+                                        heatmapImg.onerror = (error) => {
+                                            console.error(`❌ フレーム ${i}: ヒートマップ画像読み込みエラー:`, error);
+                                            resolve();
+                                        };
+                                        heatmapImg.src = frame.imageData;
+                                    });
+                                } catch (error) {
+                                    console.error(`❌ フレーム ${i}: ヒートマップ処理エラー:`, error);
+                                }
                             }
                             
                             // 詳細な情報表示
@@ -1132,205 +1177,6 @@
                 }
             }
             
-            async downloadSimpleVideo() {
-                try {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = 640;
-                    canvas.height = 480;
-                    const ctx = canvas.getContext('2d');
-                    
-                    const stream = canvas.captureStream(10);
-                    const mediaRecorder = new MediaRecorder(stream);
-                    
-                    const chunks = [];
-                    mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-                    mediaRecorder.onstop = () => {
-                        const blob = new Blob(chunks, { type: 'video/webm' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `heatmap-simple-${Date.now()}.webm`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                        this.showStatus('シンプル動画をダウンロードしました', 'success');
-                    };
-                    
-                    mediaRecorder.start();
-                    
-                    for (const frame of this.videoFrames) {
-                        const img = new Image();
-                        await new Promise(resolve => {
-                            img.onload = () => {
-                                ctx.clearRect(0, 0, 640, 480);
-                                ctx.drawImage(img, 0, 0);
-                                resolve();
-                            };
-                            img.src = frame.imageData;
-                        });
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                    }
-                    
-                    setTimeout(() => mediaRecorder.stop(), 200);
-                    
-                } catch (error) {
-                    console.error('シンプル動画生成もエラー:', error);
-                    this.showStatus('動画生成に失敗しました。ブラウザがWebM録画をサポートしていない可能性があります。', 'error');
-                }
-            }
-            
-            async downloadFramesAsImages() {
-                this.showStatus('画像フレームを生成中...', 'success');
-                
-                const frameCount = Math.min(this.videoFrames.length, this.cameraFrames.length);
-                
-                // 合成された画像フレームを作成
-                for (let i = 0; i < Math.min(frameCount, 20); i++) { // 最大20フレーム
-                    try {
-                        const compositeCanvas = document.createElement('canvas');
-                        compositeCanvas.width = 640;
-                        compositeCanvas.height = 480;
-                        const compositeCtx = compositeCanvas.getContext('2d');
-                        
-                        // カメラ映像を描画
-                        if (this.cameraFrames[i]) {
-                            const cameraImg = new Image();
-                            await new Promise((resolve, reject) => {
-                                cameraImg.onload = () => {
-                                    compositeCtx.drawImage(cameraImg, 0, 0, 640, 480);
-                                    resolve();
-                                };
-                                cameraImg.onerror = reject;
-                                cameraImg.src = this.cameraFrames[i].imageData;
-                            });
-                        }
-                        
-                        // ヒートマップを重ねる
-                        if (this.videoFrames[i]) {
-                            const heatmapImg = new Image();
-                            await new Promise((resolve, reject) => {
-                                heatmapImg.onload = () => {
-                                    compositeCtx.globalAlpha = this.heatmapOpacity;
-                                    compositeCtx.drawImage(heatmapImg, 0, 0, 640, 480);
-                                    compositeCtx.globalAlpha = 1.0;
-                                    resolve();
-                                };
-                                heatmapImg.onerror = reject;
-                                heatmapImg.src = this.videoFrames[i].imageData;
-                            });
-                        }
-                        
-                        // フレーム情報をオーバーレイ
-                        compositeCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                        compositeCtx.fillRect(10, 10, 200, 60);
-                        compositeCtx.fillStyle = 'white';
-                        compositeCtx.font = '14px Arial';
-                        compositeCtx.fillText(`フレーム: ${i + 1}/${frameCount}`, 20, 30);
-                        
-                        const timestamp = this.videoFrames[i]?.timestamp || 0;
-                        const minutes = Math.floor(timestamp / 60000);
-                        const seconds = Math.floor((timestamp % 60000) / 1000);
-                        compositeCtx.fillText(`時間: ${minutes}:${seconds.toString().padStart(2, '0')}`, 20, 50);
-                        
-                        // 画像をダウンロード
-                        const link = document.createElement('a');
-                        link.download = `people-flow-frame-${(i + 1).toString().padStart(3, '0')}.png`;
-                        link.href = compositeCanvas.toDataURL('image/png');
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                        
-                        // 少し待機
-                        await new Promise(resolve => setTimeout(resolve, 200));
-                        
-                    } catch (error) {
-                        console.error(`フレーム ${i} の生成に失敗:`, error);
-                    }
-                }
-                
-                this.showStatus(`${Math.min(frameCount, 20)}個の合成画像フレームをダウンロードしました`, 'success');
-                
-                // GIFアニメーション作成の案内
-                setTimeout(() => {
-                    this.showStatus('画像フレームをGIFアニメーションに変換するには、オンラインGIF作成ツールをご利用ください', 'success');
-                }, 3000);
-            }
-            
-            downloadSeparateVideos() {
-                // ヒートマップのみの動画
-                this.downloadHeatmapVideo();
-                
-                // カメラ映像のみの画像
-                this.downloadCameraFrames();
-            }
-            
-            async downloadHeatmapVideo() {
-                try {
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = 640;
-                    tempCanvas.height = 480;
-                    const tempCtx = tempCanvas.getContext('2d');
-                    
-                    const stream = tempCanvas.captureStream(10);
-                    const mediaRecorder = new MediaRecorder(stream, {
-                        mimeType: 'video/webm'
-                    });
-                    
-                    const chunks = [];
-                    mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            chunks.push(event.data);
-                        }
-                    };
-                    
-                    mediaRecorder.onstop = () => {
-                        const blob = new Blob(chunks, { type: 'video/webm' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `people-flow-heatmap-only-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                    };
-                    
-                    mediaRecorder.start();
-                    
-                    for (let i = 0; i < this.videoFrames.length; i++) {
-                        const frame = this.videoFrames[i];
-                        const img = new Image();
-                        
-                        await new Promise((resolve) => {
-                            img.onload = () => {
-                                tempCtx.clearRect(0, 0, 640, 480);
-                                tempCtx.drawImage(img, 0, 0);
-                                resolve();
-                            };
-                            img.src = frame.imageData;
-                        });
-                        
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                    }
-                    
-                    mediaRecorder.stop();
-                } catch (error) {
-                    console.error('ヒートマップ動画生成エラー:', error);
-                }
-            }
-            
-            downloadCameraFrames() {
-                // カメラフレームの最初の画像をダウンロード
-                if (this.cameraFrames.length > 0) {
-                    const firstFrame = this.cameraFrames[0];
-                    const a = document.createElement('a');
-                    a.href = firstFrame.imageData;
-                    a.download = `camera-sample-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                }
-            }
-            
             startDetection() {
                 const detect = async () => {
                     if (this.isDemoMode && !this.isPlayingBack) {
@@ -1338,7 +1184,7 @@
                         this.detectMotion();
                         this.updateHeatmap();
                         this.recordHeatmapFrame();
-                    } else if (this.video.readyState === this.video.HAVE_ENOUGH_DATA && !this.isPlayingBack) {
+                    } else if (this.videoReady && !this.isPlayingBack) {
                         if (this.modelLoaded) {
                             // AI検出モード
                             await this.detectPeopleWithAI();
