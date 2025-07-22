@@ -413,9 +413,11 @@
                 this.recordedChunks = [];
                 this.videoFrames = [];
                 this.cameraFrames = [];
+                this.lastCameraFrameTime = 0;
                 
                 // カメラの準備状態
                 this.videoReady = false;
+                this.lastCameraFrameTime = 0;
                 
                 this.setupCanvas();
                 this.loadAIModel();
@@ -774,9 +776,20 @@
                 this.videoFrames = [];
                 this.cameraFrames = [];
                 this.lastRecordTime = 0;
+                this.lastCameraFrameTime = 0;
                 
                 this.recordBtn.textContent = '⏹️ 記録停止';
                 this.showStatus('人流データと映像の記録を開始しました', 'success');
+                
+                // 診断情報を追加
+                console.log('🟢 記録開始 - 状態確認:');
+                console.log('- デモモード:', this.isDemoMode);
+                console.log('- ビデオ準備:', this.videoReady);
+                console.log('- ビデオreadyState:', this.video.readyState);
+                console.log('- ビデオサイズ:', this.video.videoWidth, 'x', this.video.videoHeight);
+                if (this.isDemoMode) {
+                    console.log('- デモキャンバス存在:', !!this.demoCanvas);
+                }
             }
             
             stopRecording() {
@@ -808,8 +821,8 @@
                 if (!this.isRecording) return;
                 
                 const currentTime = Date.now();
-                if (currentTime - this.lastRecordTime < this.recordingInterval) return;
                 
+                // 毎フレーム記録するように変更（間隔チェックを削除）
                 const frameData = {
                     timestamp: currentTime - this.recordingStartTime,
                     heatmapData: JSON.parse(JSON.stringify(this.heatmapData)),
@@ -819,11 +832,18 @@
                     }
                 };
                 
-                this.heatmapHistory.push(frameData);
-                this.lastRecordTime = currentTime;
+                // 間隔チェックはここで行う
+                if (currentTime - this.lastRecordTime >= this.recordingInterval) {
+                    this.heatmapHistory.push(frameData);
+                    this.lastRecordTime = currentTime;
+                    
+                    // ヒートマップフレームを記録
+                    this.recordVideoFrame();
+                    
+                    console.log(`📊 ヒートマップフレーム ${this.heatmapHistory.length} 記録完了`);
+                }
                 
-                // ヒートマップと同時にカメラフレームも記録
-                this.recordVideoFrame();
+                // カメラフレームは毎回記録（より高頻度で）
                 this.recordCameraFrame();
             }
             
@@ -843,6 +863,17 @@
                 if (!this.isRecording) {
                     return;
                 }
+                
+                // より高頻度でカメラフレームを記録するため、間隔制限を緩和
+                const currentTime = Date.now();
+                const timeSinceLastCamera = currentTime - (this.lastCameraFrameTime || 0);
+                
+                // カメラフレームは100ms間隔で記録（より高頻度）
+                if (timeSinceLastCamera < 100) {
+                    return;
+                }
+                
+                this.lastCameraFrameTime = currentTime;
                 
                 console.log(`🎥 カメラフレーム記録試行 - デモ:${this.isDemoMode}, ビデオ準備:${this.videoReady}, readyState:${this.video.readyState}`);
                 
