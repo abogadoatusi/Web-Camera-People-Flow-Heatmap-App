@@ -880,24 +880,32 @@
                 if (!this.isRecording) return;
                 
                 const currentTime = Date.now();
-                const cameraInterval = Math.max(this.recordingInterval / 2, 200);
+                const cameraInterval = Math.max(this.recordingInterval, 500); // 最低500ms間隔に変更
                 
                 if (currentTime - this.lastCameraFrameTime < cameraInterval) {
                     return;
                 }
                 
                 this.lastCameraFrameTime = currentTime;
+                console.log(`🎥 カメラフレーム記録試行 - デモ:${this.isDemoMode}, ビデオ準備:${this.videoReady}`);
                 
                 if (this.isDemoMode && this.demoCanvas) {
-                    this.cameraFrames.push({
-                        timestamp: currentTime - this.recordingStartTime,
-                        imageData: this.demoCanvas.src,
-                        frameIndex: this.cameraFrames.length,
-                        isDemo: true,
-                        width: 640,
-                        height: 480
-                    });
+                    // デモモードの場合
+                    try {
+                        this.cameraFrames.push({
+                            timestamp: currentTime - this.recordingStartTime,
+                            imageData: this.demoCanvas.src,
+                            frameIndex: this.cameraFrames.length,
+                            isDemo: true,
+                            width: 640,
+                            height: 480
+                        });
+                        console.log(`✅ デモフレーム ${this.cameraFrames.length} 記録完了`);
+                    } catch (error) {
+                        console.error('❌ デモフレーム記録エラー:', error);
+                    }
                 } else if (!this.isDemoMode && this.videoReady) {
+                    // 実際のカメラ映像の場合
                     try {
                         if (this.video && 
                             this.video.readyState >= 2 && 
@@ -909,22 +917,36 @@
                             tempCanvas.height = 480;
                             const tempCtx = tempCanvas.getContext('2d');
                             
-                            tempCtx.drawImage(this.video, 0, 0, 640, 480);
-                            const cameraImageData = tempCanvas.toDataURL('image/png');
-                            
-                            if (cameraImageData && cameraImageData.length > 1000) {
-                                this.cameraFrames.push({
-                                    timestamp: currentTime - this.recordingStartTime,
-                                    imageData: cameraImageData,
-                                    frameIndex: this.cameraFrames.length,
-                                    videoWidth: this.video.videoWidth,
-                                    videoHeight: this.video.videoHeight
-                                });
-                            }
+                            // ビデオを描画する前に少し待機
+                            setTimeout(() => {
+                                try {
+                                    tempCtx.drawImage(this.video, 0, 0, 640, 480);
+                                    const cameraImageData = tempCanvas.toDataURL('image/png');
+                                    
+                                    if (cameraImageData && cameraImageData.length > 1000) {
+                                        this.cameraFrames.push({
+                                            timestamp: currentTime - this.recordingStartTime,
+                                            imageData: cameraImageData,
+                                            frameIndex: this.cameraFrames.length,
+                                            videoWidth: this.video.videoWidth,
+                                            videoHeight: this.video.videoHeight
+                                        });
+                                        console.log(`✅ リアルカメラフレーム ${this.cameraFrames.length} 記録完了`);
+                                    } else {
+                                        console.warn('⚠️ カメラデータが無効です');
+                                    }
+                                } catch (drawError) {
+                                    console.error('❌ カメラ描画エラー:', drawError);
+                                }
+                            }, 50); // 50ms待機
+                        } else {
+                            console.warn(`⚠️ ビデオ準備不完了 - readyState: ${this.video.readyState}`);
                         }
                     } catch (error) {
-                        console.error('カメラフレーム記録エラー:', error);
+                        console.error('❌ カメラフレーム記録エラー:', error);
                     }
+                } else {
+                    console.log(`⏭️ カメラフレーム記録条件不適合`);
                 }
             }
             
@@ -1010,6 +1032,16 @@
                     return;
                 }
                 
+                // カメラフレームの品質をチェック
+                const validCameraFrames = this.cameraFrames.filter(frame => 
+                    frame.imageData && frame.imageData.length > 1000 && !frame.imageData.includes('data:,'));
+                
+                console.log(`📊 フレーム品質チェック - 総数:${this.cameraFrames.length}, 有効:${validCameraFrames.length}`);
+                
+                if (validCameraFrames.length === 0) {
+                    this.showStatus('有効なカメラフレームがありません。ヒートマップのみで動画を生成します。', 'error');
+                }
+                
                 const videoFps = parseInt(this.videoFpsSelect.value);
                 const compressionRatio = this.timelapseInfo.textContent;
                 
@@ -1052,24 +1084,34 @@
                     mediaRecorder.start();
                     
                     const frameInterval = 1000 / videoFps;
+                    const framesToProcess = Math.max(this.cameraFrames.length, this.videoFrames.length);
                     
-                    for (let i = 0; i < this.cameraFrames.length; i++) {
+                    for (let i = 0; i < framesToProcess; i++) {
                         try {
+                            // 背景を設定（デフォルトの薄いグレー）
                             ctx.fillStyle = '#f0f0f0';
                             ctx.fillRect(0, 0, 640, 480);
                             
                             let cameraStatus = '❌ なし';
+                            let cameraDrawn = false;
                             
+                            // カメラ映像を描画
                             const cameraFrame = this.cameraFrames[i];
-                            if (cameraFrame && cameraFrame.imageData) {
+                            if (cameraFrame && cameraFrame.imageData && cameraFrame.imageData.length > 1000) {
                                 try {
                                     const cameraImg = new Image();
                                     
                                     await new Promise((resolve) => {
                                         cameraImg.onload = () => {
                                             try {
-                                                ctx.drawImage(cameraImg, 0, 0, 640, 480);
-                                                cameraStatus = '✅ 表示';
+                                                // 画像が正常に読み込まれたかチェック
+                                                if (cameraImg.width > 0 && cameraImg.height > 0) {
+                                                    ctx.drawImage(cameraImg, 0, 0, 640, 480);
+                                                    cameraStatus = '✅ 表示';
+                                                    cameraDrawn = true;
+                                                } else {
+                                                    cameraStatus = '❌ 無効画像';
+                                                }
                                                 resolve();
                                             } catch (error) {
                                                 cameraStatus = '❌ エラー';
@@ -1080,7 +1122,11 @@
                                             cameraStatus = '❌ 読込エラー';
                                             resolve();
                                         };
-                                        cameraImg.src = cameraFrame.imageData;
+                                        
+                                        // 少し待ってから画像を設定
+                                        setTimeout(() => {
+                                            cameraImg.src = cameraFrame.imageData;
+                                        }, 10);
                                     });
                                 } catch (error) {
                                     cameraStatus = '❌ 処理エラー';
@@ -1089,6 +1135,23 @@
                                 cameraStatus = '⏭️ スキップ';
                             }
                             
+                            // カメラが描画されていない場合、デフォルト背景を描画
+                            if (!cameraDrawn) {
+                                const gradient = ctx.createLinearGradient(0, 0, 640, 480);
+                                gradient.addColorStop(0, '#e3f2fd');
+                                gradient.addColorStop(1, '#bbdefb');
+                                ctx.fillStyle = gradient;
+                                ctx.fillRect(0, 0, 640, 480);
+                                
+                                // デフォルトテキストを表示
+                                ctx.fillStyle = '#1976d2';
+                                ctx.font = 'bold 24px Arial';
+                                ctx.textAlign = 'center';
+                                ctx.fillText('人流ヒートマップ', 320, 240);
+                                ctx.textAlign = 'left';
+                            }
+                            
+                            // ヒートマップを重ね合わせ
                             if (this.videoFrames.length > 0) {
                                 const targetTime = cameraFrame ? cameraFrame.timestamp : i * this.recordingInterval;
                                 let closestHeatmapFrame = this.videoFrames[0];
@@ -1126,19 +1189,26 @@
                                 }
                             }
                             
-                            ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
-                            ctx.fillRect(10, 10, 350, 120);
+                            // タイムラプス情報を表示（常に表示するように修正）
+                            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                            ctx.fillRect(10, 10, 380, 130);
                             ctx.fillStyle = 'white';
-                            ctx.font = 'bold 14px Arial';
-                            ctx.fillText(`🎬 タイムラプス動画`, 20, 30);
-                            ctx.fillText(`Frame: ${i + 1}/${this.cameraFrames.length}`, 20, 50);
-                            const timestamp = cameraFrame ? cameraFrame.timestamp : i * this.recordingInterval;
-                            ctx.fillText(`Time: ${Math.floor(timestamp / 1000)}s`, 20, 70);
-                            ctx.fillText(`Camera: ${cameraStatus}`, 20, 90);
-                            ctx.fillText(`圧縮比: ${compressionRatio}`, 20, 110);
+                            ctx.font = 'bold 16px Arial';
+                            ctx.fillText(`🎬 タイムラプス動画`, 20, 35);
                             
-                            const progress = Math.round((i / this.cameraFrames.length) * 100);
-                            this.showStatus(`タイムラプス生成中... ${progress}% (${i + 1}/${this.cameraFrames.length})`, 'success');
+                            ctx.font = 'bold 14px Arial';
+                            ctx.fillText(`Frame: ${i + 1}/${framesToProcess}`, 20, 60);
+                            
+                            const timestamp = cameraFrame ? cameraFrame.timestamp : i * this.recordingInterval;
+                            const minutes = Math.floor(timestamp / 60000);
+                            const seconds = Math.floor((timestamp % 60000) / 1000);
+                            ctx.fillText(`Time: ${minutes}:${seconds.toString().padStart(2, '0')}`, 20, 85);
+                            
+                            ctx.fillText(`Camera: ${cameraStatus}`, 20, 110);
+                            ctx.fillText(`圧縮比: ${compressionRatio}`, 200, 110);
+                            
+                            const progress = Math.round((i / framesToProcess) * 100);
+                            this.showStatus(`タイムラプス生成中... ${progress}% (${i + 1}/${framesToProcess})`, 'success');
                             
                         } catch (error) {
                             console.error(`フレーム ${i} 処理エラー:`, error);
