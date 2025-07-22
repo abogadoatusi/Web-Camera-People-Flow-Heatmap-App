@@ -1073,10 +1073,10 @@
                     canvas.height = 480;
                     const ctx = canvas.getContext('2d');
                     
-                    const stream = canvas.captureStream(videoFps);
+                    const stream = canvas.captureStream(1); // 1fpsに大幅に下げる
                     const mediaRecorder = new MediaRecorder(stream, {
                         mimeType: 'video/webm',
-                        videoBitsPerSecond: 500000
+                        videoBitsPerSecond: 300000 // ビットレートも下げる
                     });
                     
                     const recordedChunks = [];
@@ -1212,7 +1212,7 @@
                             ctx.fillRect(captionX, captionY, captionW, captionH);
                             
                             // 少し待ってからテキストを描画
-                            await new Promise(resolve => setTimeout(resolve, 50));
+                            await new Promise(resolve => setTimeout(resolve, 100));
                             
                             // フォントを設定してテキストを描画
                             ctx.fillStyle = 'white';
@@ -1239,7 +1239,7 @@
                             ctx.fillText(ratioText, captionX + 190, captionY + 85);
                             
                             // テキスト描画完了を待機
-                            await new Promise(resolve => setTimeout(resolve, 100));
+                            await new Promise(resolve => setTimeout(resolve, 200));
                             
                             // より厳密なキャプション品質チェック
                             const imageData = ctx.getImageData(captionX, captionY, captionW, captionH);
@@ -1315,7 +1315,7 @@
                             console.error(`フレーム ${i} 処理エラー:`, error);
                         }
                         
-                        await new Promise(resolve => setTimeout(resolve, frameInterval));
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // 1秒待機
                     }
                     
                     setTimeout(() => {
