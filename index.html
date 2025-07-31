@@ -297,8 +297,6 @@
             <button id="stopBtn" class="btn btn-secondary" disabled>⏹️ 停止</button>
             <button id="resetBtn" class="btn btn-info">🔄 リセット</button>
             <button id="recordBtn" class="btn btn-info" disabled>🔴 記録開始</button>
-            <button id="playbackBtn" class="btn btn-info" disabled>⏯️ タイムラプス再生</button>
-            <button id="downloadBtn" class="btn btn-info" disabled>💾 JSON保存</button>
             <button id="downloadVideoBtn" class="btn btn-info" disabled>🎥 タイムラプス動画保存</button>
         </div>
 
@@ -419,8 +417,6 @@
                 this.stopBtn = document.getElementById('stopBtn');
                 this.resetBtn = document.getElementById('resetBtn');
                 this.recordBtn = document.getElementById('recordBtn');
-                this.playbackBtn = document.getElementById('playbackBtn');
-                this.downloadBtn = document.getElementById('downloadBtn');
                 this.downloadVideoBtn = document.getElementById('downloadVideoBtn');
                 
                 // 記録関連要素
@@ -471,8 +467,6 @@
                 this.recordingInterval = 500;
                 this.lastRecordTime = 0;
                 this.playbackSpeed = 10;
-                this.isPlayingBack = false;
-                this.playbackIndex = 0;
                 
                 // 動画記録用
                 this.mediaRecorder = null;
@@ -569,8 +563,6 @@
                 this.stopBtn.addEventListener('click', () => this.stopCamera());
                 this.resetBtn.addEventListener('click', () => this.resetData());
                 this.recordBtn.addEventListener('click', () => this.toggleRecording());
-                this.playbackBtn.addEventListener('click', () => this.startPlayback());
-                this.downloadBtn.addEventListener('click', () => this.downloadData());
                 this.downloadVideoBtn.addEventListener('click', () => this.downloadVideo());
                 
                 this.toggleHeatmapBtn.addEventListener('click', () => this.toggleHeatmap());
@@ -760,8 +752,6 @@
                 this.recordBtn.disabled = true;
                 
                 if (this.heatmapHistory.length > 0) {
-                    this.playbackBtn.disabled = false;
-                    this.downloadBtn.disabled = false;
                     this.downloadVideoBtn.disabled = false;
                 }
                 
@@ -782,16 +772,12 @@
                 
                 this.isRecording = false;
                 this.recordingStartTime = null;
-                this.isPlayingBack = false;
-                this.playbackIndex = 0;
                 
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                 this.updateStatsDisplay();
                 
                 this.recordBtn.textContent = '🔴 記録開始';
                 this.recordBtn.disabled = !this.videoReady;
-                this.playbackBtn.disabled = true;
-                this.downloadBtn.disabled = true;
                 this.downloadVideoBtn.disabled = true;
                 
                 this.showStatus('データがリセットされました', 'success');
@@ -844,12 +830,11 @@
                 this.recordBtn.textContent = '🔴 記録開始';
                 
                 if (this.heatmapHistory.length > 0) {
-                    this.playbackBtn.disabled = false;
-                    this.downloadBtn.disabled = false;
                     this.downloadVideoBtn.disabled = false;
                     
                     const recordDuration = Math.floor((Date.now() - this.recordingStartTime) / 1000);
-                    const expectedVideoDuration = Math.floor(this.heatmapHistory.length / parseInt(this.videoFpsSelect.value));
+                    const { fps: videoFps } = this.getQualitySettings();
+                    const expectedVideoDuration = Math.floor(this.heatmapHistory.length / videoFps);
                     const compressionRatio = this.timelapseInfo.textContent;
                     
                     this.showStatus(`記録完了！${recordDuration}秒→約${expectedVideoDuration}秒動画 (圧縮比${compressionRatio}) - タイムラプス動画を保存できます`, 'success');
@@ -986,81 +971,7 @@
                 }
             }
             
-            startPlayback() {
-                if (this.heatmapHistory.length === 0) {
-                    this.showStatus('再生するデータがありません', 'error');
-                    return;
-                }
-                
-                this.isPlayingBack = true;
-                this.playbackIndex = 0;
-                this.playbackBtn.textContent = '⏸️ 再生停止';
-                
-                this.showStatus('タイムラプス再生を開始します', 'success');
-                this.playHeatmapHistory();
-            }
             
-            stopPlayback() {
-                this.isPlayingBack = false;
-                this.playbackBtn.textContent = '⏯️ タイムラプス再生';
-                
-                if (this.heatmapHistory.length > 0) {
-                    const lastFrame = this.heatmapHistory[this.heatmapHistory.length - 1];
-                    this.heatmapData = lastFrame.heatmapData;
-                    this.updateHeatmap();
-                }
-            }
-            
-            playHeatmapHistory() {
-                if (!this.isPlayingBack || this.playbackIndex >= this.heatmapHistory.length) {
-                    this.stopPlayback();
-                    return;
-                }
-                
-                const frame = this.heatmapHistory[this.playbackIndex];
-                this.heatmapData = frame.heatmapData;
-                this.updateHeatmap();
-                
-                const minutes = Math.floor(frame.timestamp / 60000);
-                const seconds = Math.floor((frame.timestamp % 60000) / 1000);
-                this.showStatus(`タイムラプス再生中: ${minutes}:${seconds.toString().padStart(2, '0')} (${this.playbackIndex + 1}/${this.heatmapHistory.length})`, 'success');
-                
-                this.playbackIndex++;
-                
-                setTimeout(() => {
-                    this.playHeatmapHistory();
-                }, this.recordingInterval / this.playbackSpeed);
-            }
-            
-            downloadData() {
-                if (this.heatmapHistory.length === 0) {
-                    this.showStatus('ダウンロードするデータがありません', 'error');
-                    return;
-                }
-                
-                const exportData = {
-                    metadata: {
-                        recordingDate: new Date().toISOString(),
-                        totalFrames: this.heatmapHistory.length,
-                        recordingDuration: this.heatmapHistory[this.heatmapHistory.length - 1].timestamp,
-                        recordingInterval: this.recordingInterval,
-                        compressionRatio: this.timelapseInfo.textContent
-                    },
-                    frames: this.heatmapHistory
-                };
-                
-                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `people-flow-timelapse-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                
-                this.showStatus('タイムラプスデータをダウンロードしました', 'success');
-            }
             
             async downloadVideo() {
                 if (this.videoFrames.length === 0) {
@@ -1289,11 +1200,11 @@
             
             startDetection() {
                 const detect = async () => {
-                    if (this.isDemoMode && !this.isPlayingBack) {
+                    if (this.isDemoMode) {
                         this.detectMotion();
                         this.updateHeatmap();
                         this.recordHeatmapFrame();
-                    } else if (this.videoReady && !this.isPlayingBack) {
+                    } else if (this.videoReady) {
                         if (this.modelLoaded) {
                             await this.detectPeopleWithAI();
                         } else {
