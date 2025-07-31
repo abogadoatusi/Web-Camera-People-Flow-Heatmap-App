@@ -196,6 +196,9 @@
             font-size: 16px;
             transition: all 0.3s ease;
             z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .video-fullscreen-btn:hover {
@@ -1812,31 +1815,49 @@
             }
             
             isMobile() {
-                return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                       ('ontouchstart' in window && window.innerWidth < 1024);
             }
             
             async enterFullscreen() {
+                console.log('🔍 フルスクリーン開始試行...');
+                console.log('🔍 モバイル判定:', this.isMobile());
+                console.log('🔍 videoWrapper:', this.videoWrapper);
+                
                 try {
                     if (this.isMobile()) {
+                        console.log('📱 モバイルフルスクリーン開始');
                         this.enterMobileFullscreen();
                     } else {
+                        console.log('🖥️ デスクトップフルスクリーン開始');
+                        
+                        // フルスクリーンAPIの利用可能性をチェック
                         if (this.videoWrapper.requestFullscreen) {
+                            console.log('✅ requestFullscreen 使用');
                             await this.videoWrapper.requestFullscreen();
                         } else if (this.videoWrapper.webkitRequestFullscreen) {
+                            console.log('✅ webkitRequestFullscreen 使用');
                             await this.videoWrapper.webkitRequestFullscreen();
                         } else if (this.videoWrapper.mozRequestFullScreen) {
+                            console.log('✅ mozRequestFullScreen 使用');
                             await this.videoWrapper.mozRequestFullScreen();
                         } else if (this.videoWrapper.msRequestFullscreen) {
+                            console.log('✅ msRequestFullscreen 使用');
                             await this.videoWrapper.msRequestFullscreen();
+                        } else {
+                            console.log('⚠️ フルスクリーンAPI未対応、モバイル風フルスクリーンにフォールバック');
+                            this.enterMobileFullscreen();
                         }
                     }
                 } catch (error) {
-                    console.error('フルスクリーン開始エラー:', error);
-                    this.showStatus('フルスクリーンの開始に失敗しました', 'error');
+                    console.error('❌ フルスクリーン開始エラー:', error);
+                    console.log('🔄 モバイル風フルスクリーンにフォールバック');
+                    this.enterMobileFullscreen();
                 }
             }
             
             enterMobileFullscreen() {
+                console.log('📱 モバイルフルスクリーン実行中...');
                 this.isMobileFullscreen = true;
                 
                 // ビューポートを保存
@@ -1853,7 +1874,12 @@
                 // フルスクリーンスタイル適用
                 this.videoWrapper.classList.add('mobile-fullscreen');
                 
-                this.handleFullscreenChange();
+                // 少し遅延してからコントロールを表示
+                setTimeout(() => {
+                    this.handleFullscreenChange();
+                    console.log('✅ モバイルフルスクリーン完了');
+                }, 100);
+                
                 this.showStatus('フルスクリーンモード開始', 'success');
             }
             
@@ -1901,19 +1927,26 @@
             handleFullscreenChange() {
                 const isFullscreen = this.isFullscreen();
                 
+                console.log('🔄 フルスクリーン状態変更:', isFullscreen);
+                console.log('🔍 fullscreenControls:', this.fullscreenControls);
+                
                 if (isFullscreen) {
+                    console.log('✅ フルスクリーンモード - コントロール表示');
                     this.fullscreenControls.style.display = 'flex';
                     this.fullscreenBtn.textContent = '📺 通常表示';
                     if (this.videoFullscreenBtn) {
                         this.videoFullscreenBtn.style.display = 'none';
                     }
                     this.updateFullscreenStats();
+                    this.showStatus('フルスクリーンモード開始', 'success');
                 } else {
+                    console.log('✅ 通常表示モード - コントロール非表示');
                     this.fullscreenControls.style.display = 'none';
                     this.fullscreenBtn.textContent = '🔍 全画面表示';
                     if (this.videoFullscreenBtn && this.videoReady) {
                         this.videoFullscreenBtn.style.display = 'flex';
                     }
+                    this.showStatus('通常表示に戻りました', 'success');
                 }
             }
             
