@@ -136,6 +136,8 @@
             width: 640px;
             height: 480px;
             max-width: 100%;
+            aspect-ratio: 4/3;
+            object-fit: contain;
             border-radius: 15px;
         }
 
@@ -271,16 +273,116 @@
 
         @media (max-width: 768px) {
             .container {
-                padding: 20px;
+                padding: 15px;
+                max-width: 100%;
             }
             
             h1 {
-                font-size: 2rem;
+                font-size: 1.8rem;
+                margin-bottom: 20px;
+            }
+            
+            .controls {
+                gap: 10px;
+                margin-bottom: 20px;
+            }
+            
+            .btn {
+                padding: 10px 16px;
+                font-size: 14px;
+            }
+            
+            .timelapse-controls {
+                flex-direction: column;
+                gap: 10px;
+                margin-bottom: 15px;
+            }
+            
+            .control-group {
+                padding: 8px 12px;
             }
             
             video, canvas {
                 width: 100%;
                 height: auto;
+                max-height: 70vh;
+            }
+            
+            .stats {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 15px;
+                margin-top: 20px;
+            }
+            
+            .stat-card {
+                padding: 15px;
+            }
+            
+            .stat-number {
+                font-size: 1.5rem;
+            }
+        }
+        
+        /* 横画面（ランドスケープ）対応 */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .container {
+                padding: 10px;
+            }
+            
+            h1 {
+                font-size: 1.5rem;
+                margin-bottom: 15px;
+            }
+            
+            .controls {
+                margin-bottom: 15px;
+            }
+            
+            .timelapse-controls {
+                flex-direction: row;
+                justify-content: center;
+                flex-wrap: wrap;
+                margin-bottom: 10px;
+            }
+            
+            video, canvas {
+                max-height: 50vh;
+            }
+            
+            .stats {
+                grid-template-columns: repeat(4, 1fr);
+                gap: 10px;
+                margin-top: 15px;
+            }
+            
+            .legend {
+                gap: 15px;
+                margin-top: 15px;
+            }
+        }
+        
+        /* さらに小さなデバイス対応 */
+        @media (max-width: 480px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .btn {
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            
+            .controls {
+                gap: 8px;
+            }
+            
+            .stats {
+                grid-template-columns: 1fr 1fr;
+            }
+            
+            .legend {
+                flex-direction: column;
+                gap: 10px;
             }
         }
     </style>
