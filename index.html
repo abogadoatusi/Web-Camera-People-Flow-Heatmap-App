@@ -295,6 +295,7 @@
             <button id="startBtn" class="btn btn-primary">📹 AI人検出開始</button>
             <button id="demoBtn" class="btn btn-info">🎬 デモモード</button>
             <button id="stopBtn" class="btn btn-secondary" disabled>⏹️ 停止</button>
+            <button id="switchCameraBtn" class="btn btn-info" disabled>🔄 カメラ切替</button>
             <button id="resetBtn" class="btn btn-info">🔄 リセット</button>
             <button id="recordBtn" class="btn btn-info" disabled>🔴 記録開始</button>
             <button id="downloadVideoBtn" class="btn btn-info" disabled>🎥 タイムラプス動画保存</button>
@@ -415,6 +416,7 @@
                 this.startBtn = document.getElementById('startBtn');
                 this.demoBtn = document.getElementById('demoBtn');
                 this.stopBtn = document.getElementById('stopBtn');
+                this.switchCameraBtn = document.getElementById('switchCameraBtn');
                 this.resetBtn = document.getElementById('resetBtn');
                 this.recordBtn = document.getElementById('recordBtn');
                 this.downloadVideoBtn = document.getElementById('downloadVideoBtn');
@@ -477,6 +479,7 @@
                 
                 // カメラの準備状態
                 this.videoReady = false;
+                this.currentFacingMode = 'environment';
                 
                 this.setupCanvas();
                 this.loadAIModel();
@@ -561,6 +564,7 @@
                 this.startBtn.addEventListener('click', () => this.startCamera());
                 this.demoBtn.addEventListener('click', () => this.startDemo());
                 this.stopBtn.addEventListener('click', () => this.stopCamera());
+                this.switchCameraBtn.addEventListener('click', () => this.switchCamera());
                 this.resetBtn.addEventListener('click', () => this.resetData());
                 this.recordBtn.addEventListener('click', () => this.toggleRecording());
                 this.downloadVideoBtn.addEventListener('click', () => this.downloadVideo());
@@ -641,7 +645,7 @@
                             width: { ideal: 640, min: 320 },
                             height: { ideal: 480, min: 240 },
                             frameRate: { ideal: 30, min: 15 },
-                            facingMode: { ideal: 'user' },
+                            facingMode: { ideal: this.currentFacingMode },
                             aspectRatio: { ideal: 4/3 }
                         },
                         audio: false
@@ -664,6 +668,7 @@
                     this.startBtn.disabled = true;
                     this.demoBtn.disabled = true;
                     this.stopBtn.disabled = false;
+                    this.switchCameraBtn.disabled = false;
                     this.recordBtn.disabled = false;
                     
                     if (this.modelLoaded) {
@@ -687,6 +692,7 @@
                 this.startBtn.disabled = true;
                 this.demoBtn.disabled = true;
                 this.stopBtn.disabled = false;
+                this.switchCameraBtn.disabled = true;
                 this.recordBtn.disabled = false;
                 
                 this.showStatus('デモモード開始 - 仮想的な人流データを表示中', 'success');
@@ -722,6 +728,45 @@
                 this.demoCanvas = imgElement;
             }
             
+            async switchCamera() {
+                if (!this.stream) return;
+                
+                try {
+                    this.showStatus('カメラを切り替え中...', 'success');
+                    
+                    // 現在のストリームを停止
+                    this.stream.getTracks().forEach(track => track.stop());
+                    
+                    // facingModeを切り替え
+                    this.currentFacingMode = this.currentFacingMode === 'user' ? 'environment' : 'user';
+                    
+                    // 新しいカメラで再開
+                    const constraints = {
+                        video: {
+                            width: { ideal: 640, min: 320 },
+                            height: { ideal: 480, min: 240 },
+                            frameRate: { ideal: 30, min: 15 },
+                            facingMode: { ideal: this.currentFacingMode },
+                            aspectRatio: { ideal: 4/3 }
+                        },
+                        audio: false
+                    };
+                    
+                    this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    this.video.srcObject = this.stream;
+                    
+                    const cameraType = this.currentFacingMode === 'user' ? '内カメラ' : '外カメラ';
+                    this.showStatus(`${cameraType}に切り替えました`, 'success');
+                    
+                } catch (error) {
+                    console.error('カメラ切り替えエラー:', error);
+                    this.showStatus('カメラの切り替えに失敗しました', 'error');
+                    
+                    // 元のカメラに戻す
+                    this.currentFacingMode = this.currentFacingMode === 'user' ? 'environment' : 'user';
+                }
+            }
+            
             stopCamera() {
                 if (this.animationId) {
                     cancelAnimationFrame(this.animationId);
@@ -749,6 +794,7 @@
                 this.startBtn.disabled = false;
                 this.demoBtn.disabled = false;
                 this.stopBtn.disabled = true;
+                this.switchCameraBtn.disabled = true;
                 this.recordBtn.disabled = true;
                 
                 if (this.heatmapHistory.length > 0) {
