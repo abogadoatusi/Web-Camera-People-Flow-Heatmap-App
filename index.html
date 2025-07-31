@@ -583,6 +583,10 @@
                 this.videoReady = false;
                 this.currentFacingMode = 'environment';
                 
+                // 画角スケール比（デフォルト値）
+                this.scaleX = 1.0;
+                this.scaleY = 1.0;
+                
                 this.setupCanvas();
                 this.loadAIModel();
                 this.bindEvents();
@@ -591,6 +595,27 @@
                 
                 // 初期ステータスメッセージを表示
                 this.showStatus('AI人検出システム準備中...', 'success');
+            }
+            
+            adjustCanvasToVideo() {
+                // ビデオの実際のサイズを取得
+                const videoWidth = this.video.videoWidth || 640;
+                const videoHeight = this.video.videoHeight || 480;
+                
+                console.log(`📹 ビデオサイズ検出: ${videoWidth}x${videoHeight}`);
+                
+                // キャンバスサイズをビデオサイズに合わせて調整
+                this.canvas.width = videoWidth;
+                this.canvas.height = videoHeight;
+                this.detectionCanvas.width = videoWidth;
+                this.detectionCanvas.height = videoHeight;
+                
+                // スケール比を保存（ヒートマップ座標計算用）
+                this.scaleX = videoWidth / 640;
+                this.scaleY = videoHeight / 480;
+                
+                // CSSでの表示サイズは既存のレスポンシブ設定を維持
+                this.showStatus(`画角調整完了: ${videoWidth}x${videoHeight} (スケール: ${this.scaleX.toFixed(2)}x${this.scaleY.toFixed(2)})`, 'success');
             }
             
             setupCanvas() {
@@ -760,6 +785,7 @@
                     
                     this.video.addEventListener('loadeddata', () => {
                         this.videoReady = true;
+                        this.adjustCanvasToVideo();
                         this.startDetection();
                     });
                     
@@ -856,6 +882,11 @@
                     
                     this.stream = await navigator.mediaDevices.getUserMedia(constraints);
                     this.video.srcObject = this.stream;
+                    
+                    // カメラ切り替え後に画角を再調整
+                    this.video.addEventListener('loadeddata', () => {
+                        this.adjustCanvasToVideo();
+                    }, { once: true });
                     
                     const cameraType = this.currentFacingMode === 'user' ? '内カメラ' : '外カメラ';
                     this.showStatus(`${cameraType}に切り替えました`, 'success');
@@ -1152,8 +1183,8 @@
                 try {
                     // すべてのフレームを準備してから記録する新方式
                     const canvas = document.createElement('canvas');
-                    canvas.width = 640;
-                    canvas.height = 480;
+                    canvas.width = this.canvas.width;
+                    canvas.height = this.canvas.height;
                     const ctx = canvas.getContext('2d');
                     
                     // 全フレームを事前準備
@@ -1163,14 +1194,14 @@
                     for (let i = 0; i < validCameraFrames.length; i++) {
                         try {
                             // 背景クリア
-                            ctx.clearRect(0, 0, 640, 480);
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
                             
                             // デフォルト背景を設定
-                            const gradient = ctx.createLinearGradient(0, 0, 640, 480);
+                            const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
                             gradient.addColorStop(0, '#e3f2fd');
                             gradient.addColorStop(1, '#bbdefb');
                             ctx.fillStyle = gradient;
-                            ctx.fillRect(0, 0, 640, 480);
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
                             
                             let cameraDrawn = false;
                             
@@ -1183,7 +1214,7 @@
                                         cameraImg.onload = () => {
                                             try {
                                                 if (cameraImg.width > 0 && cameraImg.height > 0) {
-                                                    ctx.drawImage(cameraImg, 0, 0, 640, 480);
+                                                    ctx.drawImage(cameraImg, 0, 0, canvas.width, canvas.height);
                                                     cameraDrawn = true;
                                                 }
                                             } catch (error) {
@@ -1204,7 +1235,7 @@
                                 ctx.fillStyle = '#1976d2';
                                 ctx.font = 'bold 24px Arial';
                                 ctx.textAlign = 'center';
-                                ctx.fillText('人流ヒートマップ', 320, 240);
+                                ctx.fillText('人流ヒートマップ', canvas.width / 2, canvas.height / 2);
                                 ctx.textAlign = 'left';
                             }
                             
@@ -1229,7 +1260,7 @@
                                             heatmapImg.onload = () => {
                                                 try {
                                                     ctx.globalAlpha = 0.8;
-                                                    ctx.drawImage(heatmapImg, 0, 0, 640, 480);
+                                                    ctx.drawImage(heatmapImg, 0, 0, canvas.width, canvas.height);
                                                     ctx.globalAlpha = 1.0;
                                                 } catch (error) {
                                                     console.error('ヒートマップ描画エラー:', error);
@@ -1318,8 +1349,8 @@
                         const img = new Image();
                         await new Promise((resolve) => {
                             img.onload = () => {
-                                ctx.clearRect(0, 0, 640, 480);
-                                ctx.drawImage(img, 0, 0);
+                                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                                 
                                 const progress = Math.round(50 + ((i + 1) / preparedFrames.length) * 50);
                                 this.showStatus(`動画記録中... ${progress}% (${i + 1}/${preparedFrames.length})`, 'success');
@@ -1378,12 +1409,14 @@
                 }
                 
                 mockDetections.forEach(detection => {
-                    const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
+                    const baseGridSize = 15;
+                    const gridSize = Math.max(baseGridSize * Math.min(this.scaleX, this.scaleY), 10); // スケールに応じて調整
+                    const key = `${Math.floor(detection.x / gridSize)}_${Math.floor(detection.y / gridSize)}`;
                     if (!this.heatmapData[key]) {
                         this.heatmapData[key] = {
                             count: 0,
-                            x: Math.floor(detection.x / 20) * 20,
-                            y: Math.floor(detection.y / 20) * 20,
+                            x: Math.floor(detection.x / gridSize) * gridSize,
+                            y: Math.floor(detection.y / gridSize) * gridSize,
                             lastUpdate: currentTime
                         };
                     }
@@ -1460,13 +1493,15 @@
                     }
                     
                     const alpha = intensity * 0.6;
-                    const gradient = this.ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, 40);
+                    const baseRadius = 30;
+                    const radius = Math.max(baseRadius * Math.min(this.scaleX, this.scaleY), 20); // スケールに応じて半径調整
+                    const gradient = this.ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
                     gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
                     gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
                     
                     this.ctx.fillStyle = gradient;
                     this.ctx.beginPath();
-                    this.ctx.arc(point.x, point.y, 40, 0, Math.PI * 2);
+                    this.ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
                     this.ctx.fill();
                 });
             }
@@ -1508,12 +1543,13 @@
             
             async detectPeopleWithAI() {
                 try {
-                    this.detectionCtx.drawImage(this.video, 0, 0, 640, 480);
+                    this.detectionCtx.drawImage(this.video, 0, 0, this.detectionCanvas.width, this.detectionCanvas.height);
                     
-                    const predictions = await this.model.detect(this.detectionCanvas);
+                    // より多くの検出を行うためにmaxNumBoxesを増やし、iouThresholdを調整
+                    const predictions = await this.model.detect(this.detectionCanvas, 50, 0.3);
                     
                     const people = predictions.filter(prediction => 
-                        prediction.class === 'person' && prediction.score > 0.5
+                        prediction.class === 'person' && prediction.score > 0.3
                     );
                     
                     const detections = people.map(person => {
@@ -1548,12 +1584,14 @@
                 const currentTime = Date.now();
                 
                 detections.forEach(detection => {
-                    const key = `${Math.floor(detection.x / 20)}_${Math.floor(detection.y / 20)}`;
+                    const baseGridSize = 15;
+                    const gridSize = Math.max(baseGridSize * Math.min(this.scaleX, this.scaleY), 10); // スケールに応じて調整
+                    const key = `${Math.floor(detection.x / gridSize)}_${Math.floor(detection.y / gridSize)}`;
                     if (!this.heatmapData[key]) {
                         this.heatmapData[key] = {
                             count: 0,
-                            x: Math.floor(detection.x / 20) * 20,
-                            y: Math.floor(detection.y / 20) * 20,
+                            x: Math.floor(detection.x / gridSize) * gridSize,
+                            y: Math.floor(detection.y / gridSize) * gridSize,
                             lastUpdate: currentTime
                         };
                     }
